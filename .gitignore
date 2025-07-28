@@ -1,0 +1,18 @@
+# Secrets & configs locaux
+.streamlit/secrets.toml
+secrets/
+
+# Fichiers générés
+all_sources.txt
+__pycache__/
+*.py[cod]
+.uv/
+.env
+.venv/
+env/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
