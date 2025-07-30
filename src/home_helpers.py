@@ -6,18 +6,21 @@ Aucune dépendance réseau.
 """
 
 from __future__ import annotations
-from pathlib import Path
 from typing import Dict
-
+from src.data_sources import fetch_logfire_events
 import pandas as pd
+import datetime as _dt
 
-_CSV = Path("T3_prompts_sample.csv")
+_EARLIEST = _dt.date(2025, 6, 1)
+
 
 def load_prompts_df() -> pd.DataFrame:
-    df = pd.read_csv(_CSV, sep=";")
-    df.columns = df.columns.str.strip().str.lower()
+    days_back = (_dt.datetime.utcnow().date() - _EARLIEST).days + 1
+    rows      = fetch_logfire_events(lookback_days=days_back, limit=20000)
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], dayfirst=True, errors="coerce")
-    df = df.dropna(subset=["timestamp"])
     return df
 
 def get_weekly_metrics(df: pd.DataFrame) -> Dict[str, int]:
@@ -30,12 +33,22 @@ def get_weekly_metrics(df: pd.DataFrame) -> Dict[str, int]:
 def daily_prompt_series(df: pd.DataFrame) -> pd.DataFrame:
     tmp = df.copy()
     tmp["date"] = tmp["timestamp"].dt.date
-    tmp["is_fail"] = tmp["statut"].str.contains("échec", case=False, na=False)
+
+    # échec = tout sauf statut contenant « succès » (plus robuste)
+    tmp["is_fail"] = ~tmp["statut"].str.contains("succès", case=False, na=False)
+
     grp = tmp.groupby("date").agg(
-        prompts=("prompt", "count"),
-        failed=("is_fail", "sum"),
+        total=("prompt", "count"),      # total prompts
+        failed=("is_fail", "sum"),      # nb échecs
     )
-    return grp.tail(30).reset_index()          # dernier mois
+    grp["success"] = grp["total"] - grp["failed"]  # ✅ succès
+
+    # on ne garde que les colonnes tracées
+    return (
+        grp[["success", "failed"]]
+           .tail(30)                    # fenêtre 30 j
+           .reset_index()
+    )
 
 def daily_active_users(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -51,6 +64,43 @@ def daily_active_users(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index(name="dau")
     )
     return dau
+
+# ------------------------------------------------------------------
+#  Exports Liciel / semaine
+# ------------------------------------------------------------------
+_LICIEL_ROUTE = r"GET /project/.+/liciel"          # pattern trouvé dans Logfire
+
+def weekly_liciel_exports(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Retourne ‹week_start, exports› sur ~8 semaines pour les exports Liciel.
+    La fonction s’auto-protège : si « span_name » ou « timestamp » manquent
+    ou ne sont pas au bon format, elle renvoie un DataFrame vide.
+    """
+    if "span_name" not in df.columns or "timestamp" not in df.columns:
+        return pd.DataFrame(columns=["week", "exports"])
+
+    # ⤵︎ assure que `timestamp` est un datetime64
+    if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
+        df = df.assign(
+            timestamp=pd.to_datetime(df["timestamp"], errors="coerce", dayfirst=True)
+        )
+
+    tmp = df[df["span_name"].str.contains(_LICIEL_ROUTE, na=False, regex=True)].copy()
+    if tmp.empty:
+        return pd.DataFrame(columns=["week", "exports"])
+
+    tmp["week"] = (
+        tmp["timestamp"]
+        .dt.to_period("W-SUN")
+        .apply(lambda p: p.start_time.date())
+    )
+    exports = (
+        tmp.groupby("week")
+           .size()
+           .tail(8)
+           .reset_index(name="exports")
+    )
+    return exports
 
 
 def weekly_active_users(df: pd.DataFrame) -> pd.DataFrame:

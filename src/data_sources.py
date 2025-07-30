@@ -15,6 +15,56 @@ import httpx
 import streamlit as st
 from supabase import Client as SupabaseClient, create_client
 
+from logfire.query_client import LogfireQueryClient, QueryExecutionError
+
+_LF_READ_TOKEN: str = st.secrets["LOGFIRE_TOKEN"]
+_PROJECT_GUID = st.secrets["_PROJECT_GUID"]
+
+
+_PROMPT_SQL_TEMPLATE = """
+WITH success_spans AS (
+    SELECT DISTINCT trace_id
+    FROM   records
+    WHERE  span_name = 'Agent run succeeded'
+)
+SELECT
+  DATE_FORMAT(r.start_timestamp AT TIME ZONE 'Europe/Paris',
+              '%d/%m/%Y %H:%M:%S')           AS "timestamp",
+  COALESCE(
+      r.attributes -> 'fastapi.arguments.values' -> 'auth_info' ->> 'email',
+      r.attributes -> 'user_email' ->> 0
+  )                                         AS "email utilisateur",
+  COALESCE(
+      r.attributes -> 'fastapi.arguments.values' ->> 'content',
+      r.attributes -> 'fastapi.arguments.values' -> 'prompt' ->> 'content'
+  )                                         AS "prompt",
+  COALESCE(
+      r.attributes -> 'fastapi.arguments.values' ->> 'scope',
+      r.attributes -> 'fastapi.arguments.values' -> 'prompt' ->> 'scope'
+  )                                         AS "scope",
+  ROUND(r.duration, 2)                      AS "duree traitement",
+  CASE
+    WHEN s.trace_id IS NOT NULL THEN 'Succès'
+    ELSE 'Échec'
+  END                                       AS "statut",
+  r.trace_id                                AS "trace_id",
+  JSON_GET(
+      JSON_GET(r.attributes, 'fastapi.arguments.values'),
+      'project_id'
+  )                                         AS "id projet",
+  r.span_name                               AS "span_name"
+FROM   records r
+LEFT JOIN success_spans s USING(trace_id)
+WHERE  (
+          r.span_name ILIKE 'POST /project/%/message'   -- prompts
+       OR r.span_name ILIKE 'GET /project/%/liciel%'    -- exports Liciel
+      )
+  AND  r.project_id = '{project_guid}'
+  AND  {date_filter}
+ORDER  BY r.start_timestamp DESC
+LIMIT  {limit} OFFSET {offset}
+"""
+
 # ---------------------------------------------------------------------------
 # Supabase configuration
 # ---------------------------------------------------------------------------
@@ -144,3 +194,36 @@ def get_usage_funnel(
         {"step": "Prompts", "count": counts["prompt_call"]},
         {"step": "Exports", "count": counts["export"]},
     ]
+
+
+def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000) -> list[dict]:
+    """
+    Lit jusqu'à `limit` prompts sur les `lookback_days` derniers jours
+    (pagination interne par pas de 500 lignes).
+    """
+    cache_key = f"events:{lookback_days}:{limit}"
+    if (cached := _cache_get(cache_key)) is not None:
+        return cached
+
+    batch_size   = 500
+    collected    = []
+    offset       = 0
+    date_filter  = f"start_timestamp >= now() - INTERVAL '{lookback_days} days'"
+
+    with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
+        while len(collected) < limit:
+            sql = _PROMPT_SQL_TEMPLATE.format(
+                project_guid=_PROJECT_GUID,
+                date_filter=date_filter,
+                limit=batch_size,
+                offset=offset,
+            )
+            res   = client.query_json_rows(sql=sql)
+            batch = res.get("rows", res)
+            collected.extend(batch)
+            if len(batch) < batch_size:
+                break
+            offset += batch_size
+
+    _cache_set(cache_key, collected[:limit])
+    return collected[:limit]
