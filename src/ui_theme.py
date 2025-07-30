@@ -16,8 +16,12 @@ section.main > div          { padding-top: 1rem; }
     box-shadow: 0 4px 12px rgba(0,0,0,0.25);
 }
 
-div[data-baseweb="table"]   { border-radius: 0.75rem; overflow: hidden; }
-.stDataFrameContainer       { border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+/*   ↑ conserver le border‑radius, mais autoriser le scroll horizontal   */
+div[data-baseweb="table"]   { border-radius: 0.75rem; overflow: auto; }
+.stDataFrameContainer       { border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.3); width: 100% !important; }
+
+/* supprime la largeur max de la page (layout wide vraiment full) */
+section.main .block-container { max-width: 100% !important; }
 
 ::-webkit-scrollbar         { height: 8px; width: 8px; }
 ::-webkit-scrollbar-thumb   { background: #444; border-radius: 4px; }

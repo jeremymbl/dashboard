@@ -22,10 +22,16 @@ df = load_prompts_df()
 # ————————————————————————————————
 # Toggle global dans la barre latérale
 # ————————————————————————————————
+
 exclude_test = st.sidebar.toggle(
     "Exclure données de test (test@test.com et @auditoo.eco)",
-    value=True,                     # activé par défaut
+    value=True,
 )
+
+if exclude_test:
+    emails = df["email utilisateur"].str.lower().fillna("")
+    mask_excl = emails.eq("test@test.com") | emails.str.endswith("@auditoo.eco")
+    df = df[~mask_excl]
 
 # ─────────────────────────────────────────────────────────────
 # T1 — KPIs semaine en cours
@@ -87,7 +93,7 @@ st.divider()
 BLUE = "#1f77b4"
 RED  = "#e74c3c"
 
-st.subheader("T 2  •  Nombre de prompts (30 derniers jours)")
+st.subheader("T 2  •  Nombre de prompts (historique complet)")
 
 # 1. DataFrame « success / failed »
 ser = daily_prompt_series(df)   # colonnes: date, success, failed
@@ -106,7 +112,14 @@ fig = px.bar(
     color_discrete_map={"succès": BLUE, "échec": RED},
     labels={"count": "n prompts", "date": "jour", "statut": ""}
 )
-fig.update_layout(legend=dict(orientation="h", y=-0.25))
+fig.update_layout(
+    legend=dict(orientation="h", y=-0.25),
+)
+fig.update_xaxes(
+    dtick="D1",               # ✅ un tick par jour
+    tickformat="%d %b",       # ex. « 25 jun »
+    tickangle=-45             # labels inclinés
+)
 st.plotly_chart(fig, use_container_width=True)
 
 st.caption("Données live Logfire – sections Projets / Exports arriveront lorsque les tables seront disponibles.")
@@ -115,7 +128,7 @@ st.caption("Données live Logfire – sections Projets / Exports arriveront lors
 # ─────────────────────────────────────────────────────────────
 # T3 — Daily active users (DAU)
 # ─────────────────────────────────────────────────────────────
-st.subheader("T 3  •  Utilisateurs actifs / jour (30 j)")
+st.subheader("T 3  •  Utilisateurs actifs / jour (historique complet)")
 
 dau_df = daily_active_users(df)
 fig_dau = px.line(
@@ -127,13 +140,18 @@ fig_dau = px.line(
 
 fig_dau.update_traces(mode="lines+markers")
 fig_dau.update_yaxes(dtick=1, tickformat=".0f", rangemode="tozero")
+fig_dau.update_xaxes(
+    dtick="D1",
+    tickformat="%d %b",
+    tickangle=-45
+)
 
 st.plotly_chart(fig_dau, use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────
 # T4 — Weekly active users (WAU)
 # ─────────────────────────────────────────────────────────────
-st.subheader("T 4  •  Utilisateurs actifs / semaine (8 semaines)")
+st.subheader("T 4  •  Utilisateurs actifs / semaine (historique complet)")
 
 wau_df = weekly_active_users(df)
 fig_wau = px.line(
@@ -143,6 +161,8 @@ fig_wau = px.line(
     labels={"wau": "n utilisateurs actifs", "week": "semaine (lundi)"},
 )
 fig_wau.update_traces(mode="lines+markers")
+fig_wau.update_xaxes(tickformat="%d %b")
+
 st.plotly_chart(fig_wau, use_container_width=True)
 
 
@@ -265,8 +285,8 @@ df_table = (
 st.dataframe(
     df_table,
     column_order=[
-        "timestamp", "email utilisateur", "prompt", "scope",
-        "duree traitement", "statut",
+        "statut","timestamp", "email utilisateur", "prompt", "scope",
+        "duree traitement", 
         "trace_short",   # affiché au lieu du long ID
         "trace_url",     # la vraie URL (colonne lien)
         "id projet",
@@ -479,3 +499,52 @@ else:
         pivot_proj.columns = [f"Semaine -{i}" for i in pivot_proj.columns]
         st.dataframe(pivot_proj, use_container_width=True)
         st.caption("Clique l’icône ↗︎ pour ouvrir le tableau plein écran.")
+
+
+# ------------------------------------------------------------------
+# T10 – Exports Liciel par utilisateur : semaines glissantes
+# ------------------------------------------------------------------
+st.divider()
+st.subheader("T10  •  Exports Liciel par utilisateur – semaines glissantes")
+
+# Slider indépendant pour T10
+nb_semaines_exp = st.slider(
+    "Nombre de semaines à afficher (T10)",
+    min_value=1,
+    max_value=12,
+    value=4,
+    step=1,
+    help="Fenêtre glissante depuis la semaine courante (lundi).",
+)
+
+# 1. Filtre « exports Liciel »
+_LICIEL_ROUTE = r"GET /project/.+/liciel"
+liciel_df = filt_df[filt_df["span_name"].str.contains(_LICIEL_ROUTE, na=False, regex=True)].copy()
+
+if liciel_df.empty:
+    st.info("Aucun export Liciel trouvé sur la période sélectionnée.")
+else:
+    # 2. Semaine ISO (lundi) du timestamp
+    monday_of_ts = (
+        liciel_df["timestamp"].dt.normalize()
+        - pd.to_timedelta(liciel_df["timestamp"].dt.weekday, unit="d")
+    )
+    latest_monday = now.normalize() - pd.Timedelta(days=now.weekday())
+
+    # 3. Index semaine glissante (0 = semaine courante, 1 = précédente…)
+    liciel_df["week_idx"] = ((latest_monday - monday_of_ts).dt.days // 7).astype(int)
+
+    # 4. Pivot : lignes = e-mail, colonnes = Semaine -i, valeur = nb exports
+    pivot_exp = (
+        liciel_df
+        .groupby(["email utilisateur", "week_idx"])
+        .size()
+        .unstack(fill_value=0)
+        .reindex(columns=range(0, nb_semaines_exp), fill_value=0)
+        .sort_index(axis=1)
+    )
+    pivot_exp.columns = [f"Semaine -{i}" for i in pivot_exp.columns]
+
+    # 5. Affichage
+    st.dataframe(pivot_exp, use_container_width=True)
+    st.caption("Exports Liciel comptés quand `span_name` contient « GET /project/*/liciel ».")

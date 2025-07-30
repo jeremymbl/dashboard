@@ -38,7 +38,7 @@ def daily_prompt_series(df: pd.DataFrame) -> pd.DataFrame:
     tmp["is_fail"] = ~tmp["statut"].str.contains("succès", case=False, na=False)
 
     grp = tmp.groupby("date").agg(
-        total=("prompt", "count"),      # total prompts
+        total=("prompt", "size"),      # total prompts
         failed=("is_fail", "sum"),      # nb échecs
     )
     grp["success"] = grp["total"] - grp["failed"]  # ✅ succès
@@ -46,7 +46,6 @@ def daily_prompt_series(df: pd.DataFrame) -> pd.DataFrame:
     # on ne garde que les colonnes tracées
     return (
         grp[["success", "failed"]]
-           .tail(30)                    # fenêtre 30 j
            .reset_index()
     )
 
@@ -60,7 +59,6 @@ def daily_active_users(df: pd.DataFrame) -> pd.DataFrame:
     dau = (
         tmp.groupby("date")["email utilisateur"]
         .nunique()                 # n utilisateurs actifs
-        .tail(30)                  # fenêtre glissante 30 j
         .reset_index(name="dau")
     )
     return dau
@@ -114,7 +112,6 @@ def weekly_active_users(df: pd.DataFrame) -> pd.DataFrame:
     wau = (
         tmp.groupby("week")["email utilisateur"]
         .nunique()
-        .tail(8)                   # 8 semaines ~ 2 mois
         .reset_index(name="wau")
     )
     return wau
