@@ -297,6 +297,7 @@ st.dataframe(
     },
     hide_index=True,
     use_container_width=True,
+    height=700,
 )
 
 
@@ -375,22 +376,22 @@ else:
         filt_df
         .groupby("id projet")
         .agg(
-            date_debut=("timestamp", "min"),
-            date_fin=("timestamp", "max"),
+            date_premier_prompt=("timestamp", "min"),
+            date_dernier_prompt=("timestamp", "max"),
             user=("email utilisateur", lambda s: s.mode().iat[0] if not s.mode().empty else s.iloc[0]),
             nb_prompts=("prompt", "count"),
         )
         .reset_index()
     )
-    proj["durée"] = (proj["date_fin"] - proj["date_debut"]).apply(_fmt_timedelta)
-    proj = proj.sort_values("date_fin", ascending=False)
+    proj["durée projet"] = (proj["date_dernier_prompt"] - proj["date_premier_prompt"]).apply(_fmt_timedelta)
+    proj = proj.sort_values("date_dernier_prompt", ascending=False)
     st.dataframe(
         proj[
             [
                 "user",
-                "date_debut",
-                "date_fin",
-                "durée",
+                "date_premier_prompt",
+                "date_dernier_prompt",
+                "durée projet",
                 "nb_prompts",
                 "id projet",
             ]
