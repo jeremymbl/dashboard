@@ -34,6 +34,10 @@ SELECT
       r.attributes -> 'fastapi.arguments.values' -> 'auth_info' ->> 'email',
       r.attributes -> 'user_email' ->> 0
   )                                         AS "email utilisateur",
+  JSON_GET(
+      JSON_GET(r.attributes, 'fastapi.arguments.values'),
+      'user_id'
+  )                                         AS "user_id",
   COALESCE(
       r.attributes -> 'fastapi.arguments.values' ->> 'content',
       r.attributes -> 'fastapi.arguments.values' -> 'prompt' ->> 'content'
@@ -196,10 +200,53 @@ def get_usage_funnel(
     ]
 
 
+# ---------------------------------------------------------------------------
+#  Enrichissement e-mails via Supabase
+# ---------------------------------------------------------------------------
+_user_to_email: dict[str, str] | None = None
+_proj_to_user : dict[str, str] | None = None
+
+def _get_user_to_email() -> dict[str, str]:
+    """user_id → email  (auditoo.users)."""
+    global _user_to_email
+    if _user_to_email is None:
+        sb   = get_supabase()
+        rows = (
+            sb.schema("auditoo")
+              .table("users")
+              .select("id,email")
+              .execute()
+              .data
+            or []
+        )
+        _user_to_email = {str(r["id"]): r["email"] for r in rows if r.get("email")}
+    return _user_to_email
+
+def _get_proj_to_user() -> dict[str, str]:
+    """project_id → user_id  (auditoo.user_prompts)."""
+    global _proj_to_user
+    if _proj_to_user is None:
+        sb   = get_supabase()
+        rows = (
+            sb.schema("auditoo")
+              .table("user_prompts")
+              .select("project_id,user_id")
+              .execute()
+              .data
+            or []
+        )
+        # on garde le premier user_id rencontré pour un project_id donné
+        _proj_to_user = {}
+        for r in rows:
+            pid = str(r.get("project_id"))
+            uid = str(r.get("user_id"))
+            if pid and uid and pid not in _proj_to_user:
+                _proj_to_user[pid] = uid
+    return _proj_to_user
+
 def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000) -> list[dict]:
     """
-    Lit jusqu'à `limit` prompts sur les `lookback_days` derniers jours
-    (pagination interne par pas de 500 lignes).
+    Lit jusqu'à `limit` prompts ...
     """
     cache_key = f"events:{lookback_days}:{limit}"
     if (cached := _cache_get(cache_key)) is not None:
@@ -209,6 +256,8 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000) -> lis
     collected    = []
     offset       = 0
     date_filter  = f"start_timestamp >= now() - INTERVAL '{lookback_days} days'"
+    email_by_user = _get_user_to_email()     # user_id → email
+    user_by_proj = _get_proj_to_user()       # project_id → user_id
 
     with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
         while len(collected) < limit:
@@ -220,6 +269,22 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000) -> lis
             )
             res   = client.query_json_rows(sql=sql)
             batch = res.get("rows", res)
+
+            # —— complète les e-mails manquants ——
+            for row in batch:
+                if not row.get("email utilisateur"):
+                    # 1️⃣ tentative via user_id direct (s’il existe toujours)
+                    uid = row.get("user_id")
+                    if uid and (email := email_by_user.get(str(uid))):
+                        row["email utilisateur"] = email
+                    else:
+                        # 2️⃣ fallback  project_id → user_id → email
+                        pid = row.get("id projet")
+                        uid = user_by_proj.get(str(pid)) if pid else None
+                        if uid and (email := email_by_user.get(str(uid))):
+                            row["email utilisateur"] = email
+                row.pop("user_id", None)  # on retire pour ne pas polluer les DataFrames
+
             collected.extend(batch)
             if len(batch) < batch_size:
                 break
