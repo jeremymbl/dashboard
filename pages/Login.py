@@ -1,40 +1,24 @@
+# pages/Login.py
+
 import streamlit as st
 import streamlit_authenticator as stauth
-from collections.abc import Mapping
+from src.auth import get_auth_config # On importe la nouvelle fonction
 
-def _to_dict(obj):
-    if isinstance(obj, Mapping):
-        return {k: _to_dict(v) for k, v in obj.items()}
-    return obj
+# On récupère la config et on instancie l'objet
+config = get_auth_config()
+authenticator = stauth.Authenticate(**config)
 
-creds = _to_dict(st.secrets["credentials"])
-
-SECRET_KEY = st.secrets.get("COOKIE_SECRET_KEY")
-if not SECRET_KEY:
-    raise RuntimeError("COOKIE_SECRET_KEY manquant dans secrets.toml")
-
-auth = stauth.Authenticate(
-    creds,
-    cookie_name="auditoo_dashboard",
-    cookie_key=SECRET_KEY,
-    cookie_expiry_days=30,
-)
-
-# ---------- Login (API ≥ 0.3) ----------
-# This single call renders the login form in the main page area
-# and updates session_state with the authentication status.
-auth.login(
-    "main",
+# ---------- Login ----------
+authenticator.login(
+    location="main",
     fields={"Form name": "🔐 Connexion"},
     key="auditoo_login",
 )
 
-# ---------- Post-login ----------
-# This block checks the session_state populated by the auth.login() call.
 if st.session_state.get("authentication_status"):
     st.session_state["user"] = st.session_state.get("name") or "Utilisateur"
     st.switch_page("pages/Home.py")
 elif st.session_state.get("authentication_status") is False:
     st.error("Login ou mot de passe incorrect.")
-elif st.session_state.get("authentication_status") is None:
+else:
     st.info("Entrez vos identifiants.")

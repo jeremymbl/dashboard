@@ -1,11 +1,11 @@
+# app.py
+
 import streamlit as st
 from src.ui_theme import apply_theme
+from src.auth_guard import require_login
+require_login()
 
 st.set_page_config(page_title="Auditoo – Dashboard", layout="wide")
-
-if not st.session_state.get("authentication_status"):
-    st.switch_page("pages/Login.py")
-    st.stop()
 
 apply_theme()
 
