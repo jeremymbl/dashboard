@@ -13,6 +13,10 @@ env/
 dist/
 build/
 
+test_liciel.py
+TestSupabase.py
+gs.py
+
 # IDE
 .idea/
 .vscode/.DS_Store
