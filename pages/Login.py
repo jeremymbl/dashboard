@@ -9,11 +9,6 @@ def _to_dict(obj):
 
 creds = _to_dict(st.secrets["credentials"])
 
-# --- DEBUG PRINT 1: Check the credentials dictionary ---
-print("\n[DEBUG] Credentials loaded from secrets.toml:")
-print(creds)
-print("-" * 50)
-
 SECRET_KEY = st.secrets.get("COOKIE_SECRET_KEY")
 if not SECRET_KEY:
     raise RuntimeError("COOKIE_SECRET_KEY manquant dans secrets.toml")
@@ -33,11 +28,6 @@ auth.login(
     fields={"Form name": "🔐 Connexion"},
     key="auditoo_login",
 )
-
-# --- DEBUG PRINT 2: Check the session state after the login attempt ---
-print("\n[DEBUG] Session state after login attempt:")
-print(st.session_state)
-print("-" * 50)
 
 # ---------- Post-login ----------
 # This block checks the session_state populated by the auth.login() call.
