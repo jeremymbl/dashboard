@@ -14,10 +14,14 @@ print("\n[DEBUG] Credentials loaded from secrets.toml:")
 print(creds)
 print("-" * 50)
 
+SECRET_KEY = st.secrets.get("COOKIE_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("COOKIE_SECRET_KEY manquant dans secrets.toml")
+
 auth = stauth.Authenticate(
     creds,
     cookie_name="auditoo_dashboard",
-    key="super_secret_key",     # 🔒 change en prod
+    cookie_key=SECRET_KEY,
     cookie_expiry_days=30,
 )
 
