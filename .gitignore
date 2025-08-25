@@ -21,3 +21,4 @@ src/dashboard.egg-info/
 *.egg-info/
 .python-version
 uv.lock
+uv.lock
