@@ -1,6 +1,7 @@
 # src/auth.py
 
 import streamlit as st
+import streamlit_authenticator as stauth
 from collections.abc import Mapping
 
 def _to_dict(obj):
@@ -29,3 +30,14 @@ def get_auth_config():
         "cookie_key": cookie_key,
         "cookie_expiry_days": 30,
     }
+
+def get_authenticator():
+    """
+    Crée l'objet authenticator et le stocke dans st.session_state
+    pour qu'il persiste entre les re-runs.
+    """
+    if "authenticator" not in st.session_state:
+        config = get_auth_config()
+        st.session_state.authenticator = stauth.Authenticate(**config)
+    
+    return st.session_state.authenticator
