@@ -13,7 +13,6 @@ click==8.1.8
 contourpy==1.3.0
 cryptography==45.0.6
 cycler==0.12.1
--e git+ssh://git@github.com/jeremymbl/dashboard.git@107f63131664ea110d75762cf2595f4052444345#egg=dashboard
 deprecation==2.1.0
 exceptiongroup==1.3.0
 executing==2.2.0
