@@ -7,20 +7,15 @@ from src.auth import get_authenticator
 def require_login() -> None:
     """
     Garantit qu’un utilisateur est authentifié.
+    Redirige vers la page de Login si nécessaire.
     """
     authenticator = get_authenticator()
+    
+    # Appel du widget de login invisible. Celui-ci lira le cookie
+    # et mettra à jour le session_state lors d'un re-run.
+    authenticator.login(location="main", key="main_login")
 
-    # Le check silencieux du cookie au démarrage
-    if "authentication_status" not in st.session_state:
-        authenticator.login(
-            location="cookie-check",
-            fields={},
-            key="cookie-check",
-            clear_on_submit=False,
-        )
-
-    # Si le statut n'est toujours pas bon (pas de cookie ou cookie invalide),
-    # on redirige vers la page de login.
+    # Si après cet appel, le statut n'est pas True, on redirige.
     if not st.session_state.get("authentication_status"):
         st.switch_page("pages/Login.py")
         st.stop()
