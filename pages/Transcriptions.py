@@ -3,6 +3,8 @@ import datetime as _dt
 from typing import List, Optional
 
 import streamlit as st
+from src.auth_guard import require_login
+require_login()
 import pandas as pd
 import numpy as np
 import plotly.express as px
