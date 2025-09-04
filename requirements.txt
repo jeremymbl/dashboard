@@ -4,7 +4,8 @@
 streamlit>=1.47.1
 
 # Authentification
-streamlit-authenticator>=0.4.1
+streamlit-local-storage>=0.0.25
+loguru>=0.7.3
 
 # Manipulation et affichage des données
 pandas>=2.3.1
