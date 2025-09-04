@@ -1,5 +1,6 @@
 import streamlit as st
 from src.auth_guard import require_login
+
 require_login()
 import plotly.express as px
 import pandas as pd
