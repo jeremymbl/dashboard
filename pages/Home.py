@@ -8,7 +8,7 @@ import numpy as np
 import datetime as _dt 
 from streamlit import column_config as cc
 
-from src.data_sources import fetch_logfire_events
+from src.data_sources import fetch_logfire_events, clear_cache
 from src.home_helpers import (
     load_prompts_df,
     get_weekly_metrics,
@@ -191,7 +191,15 @@ df["timestamp"] = pd.to_datetime(df["timestamp"],
 # ------------------------------------------------------------------
 # 2. Filtres globaux
 # ------------------------------------------------------------------
-st.title("Prompts")
+# Bouton d'actualisation pour forcer le rafraîchissement du cache
+col_refresh, col_title = st.columns([1, 4])
+with col_refresh:
+    if st.button("🔄 Actualiser", help="Force le rafraîchissement des données (ignore le cache)"):
+        clear_cache()
+        st.rerun()
+
+with col_title:
+    st.title("Prompts")
 
 col1, col2, col3, col4 = st.columns(4)
 

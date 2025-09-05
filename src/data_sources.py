@@ -61,7 +61,7 @@ FROM   records r
 LEFT JOIN success_spans s USING(trace_id)
 WHERE  (
           r.span_name ILIKE 'POST /project/%/message'   -- prompts
-       OR r.span_name ILIKE 'GET /project/%/liciel%'    -- exports Liciel
+       OR r.span_name ILIKE 'GET /project/%/liciel%'    -- exports Liciel
       )
   AND  r.project_id = '{project_guid}'
   AND  {date_filter}
@@ -130,15 +130,19 @@ _LF_PROJECT_PATH = _LF_PROJECT_URL.replace(_LF_BASE_URL + "/", "")
 _http = httpx.Client(
     base_url=_LF_BASE_URL,
     headers={"Authorization": f"Bearer {_LF_TOKEN}"},
-    timeout=10.0,
+    timeout=5.0,  # Réduit de 10s à 5s pour des réponses plus rapides
 )
 
 # ---------------------------------------------------------------------------
 # Simple in‑memory TTL cache for expensive Logfire queries
 # ---------------------------------------------------------------------------
 
-_TTL_SECONDS = 300  # 5 min
+_TTL_SECONDS = 60  # 1 min pour des données plus fraîches (était 5 min)
 _cache: Dict[str, tuple[float, Any]] = {}
+
+# Cache séparé pour les mappings user/email avec TTL plus long
+_MAPPING_TTL_SECONDS = 300  # 5 min pour les mappings (changent moins souvent)
+_mapping_cache: Dict[str, tuple[float, Any]] = {}
 
 
 def _cache_get(key: str) -> Any | None:
@@ -150,6 +154,24 @@ def _cache_get(key: str) -> Any | None:
 
 def _cache_set(key: str, value: Any) -> None:
     _cache[key] = (time.time(), value)
+
+
+def _mapping_cache_get(key: str) -> Any | None:
+    item = _mapping_cache.get(key)
+    if item and time.time() - item[0] < _MAPPING_TTL_SECONDS:
+        return item[1]
+    return None
+
+
+def _mapping_cache_set(key: str, value: Any) -> None:
+    _mapping_cache[key] = (time.time(), value)
+
+
+def clear_cache() -> None:
+    """Force la suppression du cache pour obtenir des données fraîches."""
+    global _cache, _mapping_cache
+    _cache.clear()
+    _mapping_cache.clear()
 
 
 def fetch_logfire_metrics(
@@ -201,14 +223,19 @@ def get_usage_funnel(
 
 
 # ---------------------------------------------------------------------------
-#  Enrichissement e-mails via Supabase
+#  Enrichissement e-mails via Supabase (avec cache optimisé)
 # ---------------------------------------------------------------------------
 _user_to_email: dict[str, str] | None = None
 _proj_to_user : dict[str, str] | None = None
 
 def _get_user_to_email() -> dict[str, str]:
-    """user_id → email  (auditoo.users)."""
+    """user_id → email  (auditoo.users) avec cache optimisé."""
     global _user_to_email
+    
+    # Vérifier le cache d'abord
+    if (cached := _mapping_cache_get("user_to_email")) is not None:
+        return cached
+    
     if _user_to_email is None:
         sb   = get_supabase()
         rows = (
@@ -220,11 +247,19 @@ def _get_user_to_email() -> dict[str, str]:
             or []
         )
         _user_to_email = {str(r["id"]): r["email"] for r in rows if r.get("email")}
+    
+    # Mettre en cache avec TTL plus long
+    _mapping_cache_set("user_to_email", _user_to_email)
     return _user_to_email
 
 def _get_proj_to_user() -> dict[str, str]:
-    """project_id → user_id  (auditoo.user_prompts)."""
+    """project_id → user_id  (auditoo.user_prompts) avec cache optimisé."""
     global _proj_to_user
+    
+    # Vérifier le cache d'abord
+    if (cached := _mapping_cache_get("proj_to_user")) is not None:
+        return cached
+    
     if _proj_to_user is None:
         sb   = get_supabase()
         rows = (
@@ -242,20 +277,33 @@ def _get_proj_to_user() -> dict[str, str]:
             uid = str(r.get("user_id"))
             if pid and uid and pid not in _proj_to_user:
                 _proj_to_user[pid] = uid
+    
+    # Mettre en cache avec TTL plus long
+    _mapping_cache_set("proj_to_user", _proj_to_user)
     return _proj_to_user
 
-def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000) -> list[dict]:
+def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_refresh: bool = False) -> list[dict]:
     """
-    Lit jusqu'à `limit` prompts ...
+    Lit jusqu'à `limit` prompts avec optimisations de performance.
+    
+    Args:
+        lookback_days: Nombre de jours à récupérer
+        limit: Limite du nombre d'événements
+        force_refresh: Force le rafraîchissement du cache
     """
     cache_key = f"events:{lookback_days}:{limit}"
-    if (cached := _cache_get(cache_key)) is not None:
+    
+    if force_refresh:
+        clear_cache()
+    elif (cached := _cache_get(cache_key)) is not None:
         return cached
 
-    batch_size   = 500
+    batch_size   = 1000  # Augmenté de 500 à 1000 pour moins de requêtes
     collected    = []
     offset       = 0
     date_filter  = f"start_timestamp >= now() - INTERVAL '{lookback_days} days'"
+    
+    # Pré-charger les mappings une seule fois
     email_by_user = _get_user_to_email()     # user_id → email
     user_by_proj = _get_proj_to_user()       # project_id → user_id
 
@@ -270,10 +318,10 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000) -> lis
             res   = client.query_json_rows(sql=sql)
             batch = res.get("rows", res)
 
-            # —— complète les e-mails manquants ——
+            # —— complète les e-mails manquants (optimisé) ——
             for row in batch:
                 if not row.get("email utilisateur"):
-                    # 1️⃣ tentative via user_id direct (s’il existe toujours)
+                    # 1️⃣ tentative via user_id direct (s'il existe toujours)
                     uid = row.get("user_id")
                     if uid and (email := email_by_user.get(str(uid))):
                         row["email utilisateur"] = email
