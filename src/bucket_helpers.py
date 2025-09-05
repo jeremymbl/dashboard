@@ -144,3 +144,62 @@ def format_datetime(date_str: str) -> str:
         return dt.strftime('%d/%m/%Y %H:%M')
     except:
         return date_str
+
+
+def get_image_author(project_id: str) -> str:
+    """
+    Récupère l'auteur d'une image basé sur le project_id.
+    Utilise la même logique que dans data_sources.py pour faire le lien
+    project_id → user_id → email.
+    
+    Args:
+        project_id: L'ID du projet associé à l'image
+        
+    Returns:
+        str: L'email de l'auteur ou "N/A" si non trouvé
+    """
+    if not project_id:
+        return "N/A"
+    
+    try:
+        # Import ici pour éviter les imports circulaires
+        from src.data_sources import get_supabase
+        
+        sb = get_supabase()
+        
+        # 1. Récupère le user_id depuis auditoo.user_prompts
+        user_prompt_result = (
+            sb.schema("auditoo")
+              .table("user_prompts")
+              .select("user_id")
+              .eq("project_id", project_id)
+              .limit(1)
+              .execute()
+        )
+        
+        if not user_prompt_result.data:
+            return "N/A"
+        
+        user_id = user_prompt_result.data[0].get("user_id")
+        if not user_id:
+            return "N/A"
+        
+        # 2. Récupère l'email depuis auditoo.users
+        user_result = (
+            sb.schema("auditoo")
+              .table("users")
+              .select("email")
+              .eq("id", user_id)
+              .limit(1)
+              .execute()
+        )
+        
+        if not user_result.data:
+            return "N/A"
+        
+        email = user_result.data[0].get("email")
+        return email if email else "N/A"
+        
+    except Exception as e:
+        # En cas d'erreur, retourne N/A silencieusement
+        return "N/A"

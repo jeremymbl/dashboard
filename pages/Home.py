@@ -17,7 +17,7 @@ from src.home_helpers import (
     weekly_active_users,
     weekly_liciel_exports,
 )
-from src.bucket_helpers import get_bucket_images, format_file_size, format_datetime
+from src.bucket_helpers import get_bucket_images, format_file_size, format_datetime, get_image_author
 
 st.title("Home dashboard (données live logfire)")
 
@@ -248,7 +248,11 @@ if exclude_test:
 # ------------------------------------------------------------------
 # T5 – Tableau complet
 # ------------------------------------------------------------------
-st.subheader(f"T5  •  Tous les prompts ({len(filt_df)})")
+# Filtrer pour ne garder que les vrais prompts (POST message), pas les exports Liciel
+_MESSAGE_ROUTE = r"POST /project/.+/message"
+prompts_only_df = filt_df[filt_df["span_name"].str.contains(_MESSAGE_ROUTE, na=False, regex=True)].copy()
+
+st.subheader(f"T5  •  Tous les prompts ({len(prompts_only_df)})")
 
 # ── 1. Préparation du DataFrame ──────────────────────────────────────────────
 COLS = [
@@ -278,7 +282,7 @@ def make_logfire_url(tid: str, window: str = "30d") -> str:
     )
 
 df_table = (
-    filt_df[COLS]
+    prompts_only_df[COLS]
         .assign(
             trace_url=lambda d: d["trace_id"].apply(make_logfire_url),
             trace_short=lambda d: d["trace_id"].str.slice(0, 8) + "…",
@@ -304,11 +308,61 @@ st.dataframe(
     height=700,
 )
 
+# ------------------------------------------------------------------
+# T5 bis – Tableau des exports Liciel
+# ------------------------------------------------------------------
+# Filtrer pour ne garder que les exports Liciel
+_LICIEL_ROUTE = r"GET /project/.+/liciel"
+exports_only_df = filt_df[filt_df["span_name"].str.contains(_LICIEL_ROUTE, na=False, regex=True)].copy()
+
+st.subheader(f"T5 bis  •  Tous les exports Liciel ({len(exports_only_df)})")
+
+if exports_only_df.empty:
+    st.info("Aucun export Liciel trouvé sur la période sélectionnée.")
+else:
+    # Colonnes spécifiques aux exports (pas de prompt ni scope)
+    EXPORT_COLS = [
+        "timestamp",
+        "email utilisateur",
+        "duree traitement",
+        "statut",
+        "trace_id",
+        "id projet",
+    ]
+    
+    df_exports_table = (
+        exports_only_df[EXPORT_COLS]
+            .assign(
+                trace_url=lambda d: d["trace_id"].apply(make_logfire_url),
+                trace_short=lambda d: d["trace_id"].str.slice(0, 8) + "…",
+            )
+            .sort_values("timestamp", ascending=False)
+    )
+    
+    st.dataframe(
+        df_exports_table,
+        column_order=[
+            "statut", "timestamp", "email utilisateur", 
+            "duree traitement", 
+            "trace_short",   # affiché au lieu du long ID
+            "trace_url",     # la vraie URL (colonne lien)
+            "id projet",
+        ],
+        column_config={
+            "trace_short": cc.TextColumn(width="small", label="trace_id"),
+            "trace_url":   cc.LinkColumn(display_text="ouvrir"),
+        },
+        hide_index=True,
+        use_container_width=True,
+        height=400,  # Plus petit que T5 car généralement moins d'exports
+    )
+
+st.divider()
 
 # ------------------------------------------------------------------
 # T6 – Prompts lents (> 7 s)  +  T7 – Camembert temps de réponse
 # ------------------------------------------------------------------
-slow_df = filt_df[filt_df["duree traitement"].gt(7)]
+slow_df = prompts_only_df[prompts_only_df["duree traitement"].gt(7)]
 left, right = st.columns([2, 1])
 
 with left:
@@ -332,7 +386,7 @@ with right:
     st.subheader("T7  •  Répartition par temps")
     bins = [0, 3, 7, np.inf]
     labels = ["0–3 s", "3–7 s", "7 s et +"]
-    cat = pd.cut(filt_df["duree traitement"], bins=bins, labels=labels, right=False)
+    cat = pd.cut(prompts_only_df["duree traitement"], bins=bins, labels=labels, right=False)
     pie = cat.value_counts().reindex(labels, fill_value=0).reset_index()
     pie.columns = ["tranche", "count"]
     color_map = {
@@ -373,11 +427,11 @@ def _fmt_timedelta(delta: pd.Timedelta) -> str:
     parts.append(f"{minutes} min")
     return " ".join(parts)
 
-if "id projet" not in filt_df.columns or filt_df["id projet"].isna().all():
+if "id projet" not in prompts_only_df.columns or prompts_only_df["id projet"].isna().all():
     st.info("Pas encore de données projet dans le CSV — attendons Supabase/Logfire.")
 else:
     proj = (
-        filt_df
+        prompts_only_df
         .groupby("id projet")
         .agg(
             date_premier_prompt=("timestamp", "min"),
@@ -423,7 +477,7 @@ nb_semaines = st.slider(
 
 latest_monday = now.normalize() - pd.Timedelta(days=now.weekday())
 cutoff        = latest_monday - pd.Timedelta(weeks=nb_semaines)
-last_df       = filt_df[filt_df["timestamp"] >= cutoff].copy()
+last_df       = prompts_only_df[prompts_only_df["timestamp"] >= cutoff].copy()
 
 if last_df.empty:
     st.info("Aucun prompt sur les dernières semaines sélectionnées.")
@@ -565,8 +619,25 @@ st.subheader("T11  •  Galerie d'images")
 with st.spinner("Chargement des images..."):
     images = get_bucket_images(limit=20)
 
+# Application du filtre d'exclusion des données de test
+if exclude_test and images:
+    filtered_images = []
+    for image in images:
+        project_id = image.get('project_id', '')
+        author = get_image_author(project_id)
+        
+        # Exclure si l'auteur est test@test.com ou se termine par @auditoo.eco
+        if author and author.lower() != "n/a":
+            author_lower = author.lower()
+            if author_lower == "test@test.com" or author_lower.endswith("@auditoo.eco"):
+                continue  # Exclure cette image
+        
+        filtered_images.append(image)
+    
+    images = filtered_images
+
 if not images:
-    st.info("Aucune image trouvée dans le bucket.")
+    st.info("Aucune image trouvée dans le bucket." + (" (après exclusion des données de test)" if exclude_test else ""))
 else:
     # En-tête avec statistiques
     col_info1, col_info2, col_info3 = st.columns(3)
@@ -718,11 +789,11 @@ else:
                     # Container avec style personnalisé
                     with st.container():
                         try:
-                            # Badge du projet
+                            # Badge du projet avec tooltip
                             project_id = image.get('project_id', 'N/A')
                             project_short = project_id[:12] + "..." if len(project_id) > 12 else project_id
                             
-                            st.markdown(f'<div class="project-badge">{project_short}</div>', 
+                            st.markdown(f'<div class="project-badge" title="{project_id}">{project_short}</div>', 
                                       unsafe_allow_html=True)
                             
                             # Image principale avec lightbox
@@ -751,12 +822,24 @@ else:
                             file_size = format_file_size(metadata.get('size', 0))
                             created_at = format_datetime(image.get('created_at', ''))
                             
+                            # Récupération de l'auteur de l'image
+                            author = get_image_author(project_id)
+                            
                             # Raccourcir le nom de fichier si trop long
                             if len(file_name) > 25:
                                 file_name = file_name[:22] + "..."
                             
+                            # Raccourcir l'email de l'auteur si trop long
+                            author_display = author
+                            if author != "N/A" and len(author) > 20:
+                                author_display = author[:17] + "..."
+                            
                             metadata_html = f"""
                             <div class="image-metadata">
+                                <div class="metadata-row">
+                                    <span class="metadata-label">Auteur:</span>
+                                    <span class="metadata-value" title="{author}">{author_display}</span>
+                                </div>
                                 <div class="metadata-row">
                                     <span class="metadata-label">Fichier:</span>
                                     <span class="metadata-value">{file_name}</span>
