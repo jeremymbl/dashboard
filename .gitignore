@@ -16,6 +16,7 @@ build/
 test_liciel.py
 TestSupabase.py
 gs.py
+print_liciel.py
 
 # IDE
 .idea/
