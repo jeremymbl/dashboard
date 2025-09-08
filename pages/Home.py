@@ -143,7 +143,7 @@ fig_dau = px.line(
 )
 
 fig_dau.update_traces(mode="lines+markers")
-fig_dau.update_yaxes(dtick=1, tickformat=".0f", rangemode="tozero")
+fig_dau.update_yaxes(dtick=1, tickformat=".0f", range=[0, None])
 fig_dau.update_xaxes(
     dtick="D1",
     tickformat="%d %b",
@@ -165,7 +165,8 @@ fig_wau = px.line(
     labels={"wau": "n utilisateurs actifs", "week": "semaine (lundi)"},
 )
 fig_wau.update_traces(mode="lines+markers")
-fig_wau.update_xaxes(tickformat="%d %b")
+fig_wau.update_yaxes(dtick=1, tickformat=".0f", range=[0, None])
+fig_wau.update_xaxes(tickformat="%d %b")
 
 st.plotly_chart(fig_wau, use_container_width=True)
 
