@@ -284,31 +284,36 @@ def _get_proj_to_user() -> dict[str, str]:
 
 def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_refresh: bool = False) -> list[dict]:
     """
-    Lit jusqu'à `limit` prompts avec optimisations de performance.
+    Lit jusqu'à `limit` prompts depuis la date la plus ancienne disponible.
     
     Args:
-        lookback_days: Nombre de jours à récupérer
+        lookback_days: Paramètre conservé pour compatibilité mais ignoré - on récupère tout depuis le début
         limit: Limite du nombre d'événements
         force_refresh: Force le rafraîchissement du cache
     """
-    cache_key = f"events:{lookback_days}:{limit}"
+    cache_key = f"events:all:{limit}"  # Cache key modifié pour refléter qu'on récupère tout
     
     if force_refresh:
         clear_cache()
     elif (cached := _cache_get(cache_key)) is not None:
         return cached
 
-    batch_size   = 1000  # Augmenté de 500 à 1000 pour moins de requêtes
+    batch_size   = 500  # Ajusté à 500 car Logfire semble limiter à cette valeur
     collected    = []
     offset       = 0
-    date_filter  = f"start_timestamp >= now() - INTERVAL '{lookback_days} days'"
+    
+    # Récupérer depuis la date la plus ancienne disponible (pas de filtre de date)
+    date_filter  = "1=1"  # Pas de filtre de date - on veut tout
     
     # Pré-charger les mappings une seule fois
     email_by_user = _get_user_to_email()     # user_id → email
     user_by_proj = _get_proj_to_user()       # project_id → user_id
 
     with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
-        while len(collected) < limit:
+        max_iterations = 10  # Protection contre les boucles infinies
+        iteration = 0
+        
+        while len(collected) < limit and iteration < max_iterations:
             sql = _PROMPT_SQL_TEMPLATE.format(
                 project_guid=_PROJECT_GUID,
                 date_filter=date_filter,
@@ -317,6 +322,10 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
             )
             res   = client.query_json_rows(sql=sql)
             batch = res.get("rows", res)
+
+            # Si aucun résultat, on arrête
+            if not batch:
+                break
 
             # —— complète les e-mails manquants (optimisé) ——
             for row in batch:
@@ -334,9 +343,10 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
                 row.pop("user_id", None)  # on retire pour ne pas polluer les DataFrames
 
             collected.extend(batch)
-            if len(batch) < batch_size:
-                break
-            offset += batch_size
-
+            
+            # Continuer tant qu'on reçoit des résultats (même si moins que batch_size)
+            # On s'arrête seulement si on n'a aucun résultat
+            offset += len(batch)  # Utiliser len(batch) au lieu de batch_size
+            iteration += 1
     _cache_set(cache_key, collected[:limit])
     return collected[:limit]
