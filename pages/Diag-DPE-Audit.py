@@ -273,8 +273,16 @@ if st.button("Générer l'histogramme", type="primary"):
         # Créer un DataFrame pour le tableau
         table_data = []
         for data in monthly_data:
+            # Convertir le mois en français pour l'affichage
+            year, month = data["month"].split('-')
+            month_names = {
+                1: "Jan", 2: "Fév", 3: "Mar", 4: "Avr", 5: "Mai", 6: "Juin",
+                7: "Juil", 8: "Août", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Déc"
+            }
+            month_label = f"{month_names[int(month)]} {year}"
+            
             table_data.append({
-                "Mois": data["month"],
+                "Mois": month_label,
                 "Diagnostiqueurs DPE": data["DPE"],
                 "Diagnostiqueurs Audit": data["Audit"],
                 "Source": data["resource_label"]
