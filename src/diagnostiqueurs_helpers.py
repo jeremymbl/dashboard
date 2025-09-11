@@ -193,14 +193,24 @@ def prepare_chart_data(monthly_data: List[Dict]) -> pd.DataFrame:
     for i, data in enumerate(reversed_data):
         print(f"{i+1}. {data['month']} - {data['resource_label']}")
     
+    # Créer les labels de mois en français
+    month_names = {
+        1: "Jan", 2: "Fév", 3: "Mar", 4: "Avr", 5: "Mai", 6: "Juin",
+        7: "Juil", 8: "Août", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Déc"
+    }
+    
     for data in reversed_data:
+        # Convertir YYYY-MM en label français
+        year, month = data['month'].split('-')
+        month_label = f"{month_names[int(month)]} {year}"
+        
         chart_data.append({
-            'month': data['month'],
+            'month': month_label,
             'certificate_type': 'DPE',
             'count': data['DPE']
         })
         chart_data.append({
-            'month': data['month'], 
+            'month': month_label, 
             'certificate_type': 'Audit énergétique',
             'count': data['Audit']
         })

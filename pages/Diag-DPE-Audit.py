@@ -76,9 +76,8 @@ def apply_theme_styling(fig, theme, chart_df):
             },
             legend={
                 'orientation': 'h', 'yanchor': 'bottom', 'y': -0.25, 'xanchor': 'center', 'x': 0.5,
-                'title': {'text': 'Type de certification', 'font': {'size': 14, 'color': '#34495e'}, 'side': 'top'},
-                'font': {'color': '#34495e', 'size': 14},
-                'itemsizing': 'constant'
+                'title': {'text': 'Type de certification', 'font': {'size': 14, 'color': '#34495e'}},
+                'font': {'color': '#34495e', 'size': 14}
             },
             margin=dict(l=80, r=80, t=140, b=160), width=1200, height=800
         )
@@ -213,27 +212,15 @@ def generate_histogram():
         # Préparer les données pour le graphique
         chart_df = prepare_chart_data(monthly_data)
         
-        # Convertir les mois en labels français comme pour DPE et audits
-        month_names = {
-            1: "Jan", 2: "Fév", 3: "Mar", 4: "Avr", 5: "Mai", 6: "Juin",
-            7: "Juil", 8: "Août", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Déc"
-        }
-        
-        # Ajouter les labels français
-        chart_df_with_labels = chart_df.copy()
-        chart_df_with_labels['month_label'] = chart_df_with_labels['month'].apply(
-            lambda x: f"{month_names[int(x.split('-')[1])]} {x.split('-')[0]}"
-        )
-        
-        # Créer l'histogramme avec Plotly
+        # Créer l'histogramme avec Plotly (utiliser directement chart_df qui a déjà les bons labels)
         fig = px.bar(
-            chart_df_with_labels,
-            x="month_label",
+            chart_df,
+            x="month",
             y="count",
             color="certificate_type",
             barmode="group",
             labels={
-                "month_label": "Mois",
+                "month": "Mois",
                 "count": "Nombre de diagnostiqueurs",
                 "certificate_type": "Type de certification"
             },
@@ -244,18 +231,19 @@ def generate_histogram():
             }
         )
         
-        # Personnaliser l'apparence
+        # Personnaliser l'apparence avec légende mieux centrée
         fig.update_layout(
             xaxis_title="Mois",
             yaxis_title="Nombre de diagnostiqueurs",
             legend={
                 'orientation': 'h', 
                 'yanchor': 'bottom', 
-                'y': -0.2, 
+                'y': -0.15, 
                 'xanchor': 'center', 
                 'x': 0.5,
                 'title': {'text': 'Type de certification', 'font': {'size': 14}},
-                'font': {'size': 14}
+                'font': {'size': 14},
+                'itemwidth': 30
             },
             font=dict(size=14),
         )
