@@ -109,26 +109,23 @@ class DiagListRessource(BaseModel):
 
     @staticmethod
     async def fetch_all() -> list["DiagListRessource"]:
-        """Fetch all available diagnostic resources from data.gouv.fr.
+        """Fetch all available diagnostic resources from data.gouv.fr using the official API."""
+        
+        dataset_id = "5bc5df57634f417a900a5ed0"  # ID de l'annuaire des diagnostiqueurs
+        api_url = f"https://www.data.gouv.fr/api/1/datasets/{dataset_id}/"
 
-        Returns:
-            List of resources sorted by date (most recent first)
-        """
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.get(api_url, timeout=20.0)
+                response.raise_for_status()
+                data = response.json()
+            except httpx.RequestError as e:
+                print(f"API request failed: {e}")
+                return []
 
+        # La fonction de parsing de date est toujours utile
         def _parse_date_from_label(label: str) -> Optional[Date]:
-            """Parse date from French diagnostic resource labels.
-
-            Supports three formats:
-            1. YYYYMMDD-filename.csv (e.g., "20250701-annuaire-diagnostiqueurs.csv")
-            2. "Maj du DD/MM/YYYY" (e.g., "Annuaire (Maj du 31/12/2019)")
-            3. "dernière mise à jour" (returns None - indicates latest)
-
-            Args:
-                label: The resource label text to parse
-
-            Returns:
-                Parsed date or None if no specific date found
-            """
+            """Parse date from French diagnostic resource labels."""
             # Format 1: YYYYMMDD-filename.csv
             format1_pattern = r"^(\d{4})(\d{2})(\d{2})-"
             match = re.match(format1_pattern, label)
@@ -148,102 +145,36 @@ class DiagListRessource(BaseModel):
                     return Date(int(year), int(month), int(day))
                 except ValueError:
                     pass
-
-            # Format 3: "dernière mise à jour" or no specific date
             return None
 
-        async def _fetch_html_with_playwright(url: str, timeout: int = 30000) -> Optional[str]:
-            """Fetch rendered HTML content using Playwright for JavaScript-heavy sites.
-
-            Args:
-                url: The URL to fetch
-                timeout: Request timeout in milliseconds
-
-            Returns:
-                Rendered HTML content or None if failed
-            """
-            try:
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=True)
-                    page = await browser.new_page()
-
-                    await page.set_extra_http_headers(
-                        {"User-Agent": "Mozilla/5.0 (compatible; ScraperBot/1.0; +https://example.com/bot)"}
+        files: list[DiagListRessource] = []
+        for resource in data.get("resources", []):
+            if resource.get("format", "").lower() == "csv":
+                resource_id = resource.get("id", "")
+                title = resource.get("title", "")
+                
+                if resource_id and title:
+                    parsed_date = _parse_date_from_label(title)
+                    files.append(
+                        DiagListRessource(
+                            id=resource_id,
+                            label=title,
+                            date=parsed_date,
+                            index=-1,  # Sera défini après le tri
+                        )
                     )
 
-                    await page.goto(url, timeout=timeout)
-                    await page.wait_for_load_state("networkidle")
-                    await page.wait_for_timeout(2000)  # Wait for Vue app to render
-
-                    html = await page.content()
-                    await browser.close()
-                    return html
-
-            except Exception as e:
-                print(Panel(f"[red]Playwright request failed:[/red] {e}", title="Error", style="red"))
-                return None
-
-        def _scrap_diag_list_ressources(html: str) -> list[DiagListRessource]:
-            """Extract and parse diagnostic resources from HTML content.
-
-            Args:
-                html: HTML content containing resource options
-
-            Returns:
-                List of resources sorted by date (None date first, then descending)
-
-            Raises:
-                ValueError: If there's not exactly one undated resource at the top
-            """
-            soup = BeautifulSoup(html, "html.parser")
-            select = soup.find("select")
-
-            if not select or not isinstance(select, Tag):
-                print(Panel("[yellow]No <select> element found.[/yellow]", title="Notice", style="yellow"))
-                return []
-
-            files: list[DiagListRessource] = []
-            for option in select.find_all("option"):
-                if isinstance(option, Tag):
-                    value = option.get("value", "")
-                    text = option.get_text(strip=True)
-
-                    if value and text:  # Skip empty options
-                        parsed_date = _parse_date_from_label(text)
-                        files.append(
-                            DiagListRessource(
-                                id=str(value),
-                                label=str(text),
-                                date=parsed_date,
-                                index=-1,  # Set after sorting
-                            )
-                        )
-
-            # Separate dated and undated resources
-            dated = [f for f in files if f.date is not None]
-            undated = [f for f in files if f.date is None]
-
-            # Warn if not exactly one undated resource
-            if len(undated) != 1:
-                print(Panel(f"[yellow]WARNING: Expected exactly one undated resource (latest), but found {len(undated)}.\nCheck the data source for anomalies.[/yellow]", title="Resource List Warning", style="yellow"))
-
-            # Sort dated resources by date descending (most recent first)
-            dated.sort(key=lambda x: (0, x.date) if x.date is not None else (1, Date.min), reverse=True)
-
-            # Combine: undated first, then dated
-            files = undated + dated
-
-            # Set index positions
-            for idx, f in enumerate(files):
-                f.index = idx
-
-            return files
-
-        url = "https://explore.data.gouv.fr/fr/resources/a0826a82-df34-4455-b0fc-37b9516554c5"
-        html = await _fetch_html_with_playwright(url)
-        if not html:
-            return []
-        return _scrap_diag_list_ressources(html)
+        # La logique de tri reste la même
+        dated = sorted([f for f in files if f.date is not None], key=lambda x: x.date, reverse=True)
+        undated = [f for f in files if f.date is None]
+        
+        # Le fichier le plus récent sans date est souvent le "dernier", on le met en premier
+        files = undated + dated
+        
+        for idx, f in enumerate(files):
+            f.index = idx
+            
+        return files
 
     @classmethod
     def fetch_all_sync(cls) -> list["DiagListRessource"]:
