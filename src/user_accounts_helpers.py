@@ -43,14 +43,13 @@ def create_user_account(email: str, password: str, first_name: str, last_name: s
         
         # 2. Toujours essayer d'insérer dans auditoo.users (ou mettre à jour si existe)
         try:
-            # Essayer d'insérer avec le mot de passe en clair
+            # Essayer d'insérer
             auditoo_response = sb.schema('auditoo').table('users').insert({
                 "id": user_id,
                 "email": email,
                 "first_name": first_name,
                 "last_name": last_name,
-                "role": "user",
-                "plain_password": password  # Stocker le mot de passe en clair (non recommandé mais demandé)
+                "role": "user"
             }).execute()
         except Exception as insert_error:
             # Si l'insertion échoue (utilisateur existe déjà), faire une mise à jour
@@ -59,8 +58,7 @@ def create_user_account(email: str, password: str, first_name: str, last_name: s
                     "email": email,
                     "first_name": first_name,
                     "last_name": last_name,
-                    "role": "user",
-                    "plain_password": password
+                    "role": "user"
                 }).eq('id', user_id).execute()
             else:
                 raise insert_error
