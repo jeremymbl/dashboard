@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 import datetime as _dt 
 from streamlit import column_config as cc
+from zoneinfo import ZoneInfo
 
 from src.data_sources import fetch_logfire_events, clear_cache
 from src.home_helpers import (
@@ -172,11 +173,14 @@ st.plotly_chart(fig_wau, use_container_width=True)
 
 
 # ------------------------------------------------------------------
+
 # 1. Source de données
+
 # ------------------------------------------------------------------
-today       = _dt.datetime.utcnow().date()
+
+today_local = _dt.datetime.now(ZoneInfo("Europe/Paris")).date()
 earliest_dt = _dt.date(2025, 6, 1)
-days_back   = (today - earliest_dt).days + 1
+days_back   = (today_local - earliest_dt).days + 1
 
 raw = fetch_logfire_events(lookback_days=days_back, limit=20000)
 
@@ -185,14 +189,18 @@ if not raw:
     st.stop()
 st.caption("Données live Logfire")
 df = pd.DataFrame(raw)
-df["timestamp"] = pd.to_datetime(df["timestamp"],
-                                 format="%d/%m/%Y %H:%M:%S",
-                                 errors="coerce")
+df["timestamp"] = pd.to_datetime(
+    df["timestamp"],
+    format="%d/%m/%Y %H:%M:%S",
+    errors="coerce"
+)
 
 # ------------------------------------------------------------------
+
 # 2. Filtres globaux
+
 # ------------------------------------------------------------------
-# Bouton d'actualisation pour forcer le rafraîchissement du cache
+
 col_refresh, col_title = st.columns([1, 4])
 with col_refresh:
     if st.button("🔄 Actualiser", help="Force le rafraîchissement des données (ignore le cache)"):
@@ -204,17 +212,82 @@ with col_title:
 
 col1, col2, col3, col4 = st.columns(4)
 
-default_end   = df["timestamp"].max().date()
+today_local   = _dt.datetime.now(ZoneInfo("Europe/Paris")).date()
 default_start = earliest_dt
+default_end   = today_local                 # 👈 ancre l’ouverture sur le mois courant
+calendar_max  = today_local                 # borne sup = aujourd’hui
+
+def _normalize_date_range(
+    sel,
+    *,
+    prev: tuple[_dt.date, _dt.date] | None,
+    default_start: _dt.date,
+    default_end: _dt.date,
+    min_value: _dt.date,
+    max_value: _dt.date,
+) -> tuple[_dt.date, _dt.date]:
+    def _to_date(x):
+        if isinstance(x, _dt.datetime):
+            return x.date()
+        if isinstance(x, _dt.date):
+            return x
+        return None
+
+    # Aplatir une éventuelle structure imbriquée : ((date,date),) → [date, date]
+    if isinstance(sel, (list, tuple)):
+        items = []
+        for it in sel:
+            if isinstance(it, (list, tuple)):
+                items.extend(list(it))
+            else:
+                items.append(it)
+    else:
+        items = [sel]
+
+    a = _to_date(items[0]) if len(items) >= 1 else None
+    b = _to_date(items[1]) if len(items) >= 2 else None
+
+    # Remplissage des bornes manquantes
+    if a is None and b is None:
+        a, b = default_start, default_end
+    elif a is None:
+        a = prev[0] if prev else default_start
+    elif b is None:
+        b = prev[1] if prev else a
+
+    # Clamp dans [min_value, max_value] avec coercition
+    minv = _to_date(min_value) or default_start
+    maxv = _to_date(max_value) or default_end
+
+    a = max(minv, min(maxv, _to_date(a) or default_end))
+    b = max(minv, min(maxv, _to_date(b) or default_end))
+
+    # Réordonner si nécessaire
+    if b < a:
+        a, b = b, a
+    return a, b
 
 with col1:
-    start_date, end_date = st.date_input(
-    "Période",
-    value=(default_start, default_end),
-    min_value=earliest_dt,
-    max_value=default_end,
-    format="DD/MM/YYYY",
-)   
+    raw_sel = st.date_input(
+        "Période",
+        value=(default_start, default_end),
+        min_value=default_start,
+        max_value=calendar_max,
+        format="DD/MM/YYYY",
+        key="home_period",
+    )
+    start_date, end_date = _normalize_date_range(
+        raw_sel,
+        prev=st.session_state.get("_home_period_last"),
+        default_start=default_start,
+        default_end=default_end,
+        min_value=default_start,
+        max_value=calendar_max,
+    )
+    st.session_state["_home_period_last"] = (start_date, end_date)
+    # Optionnel : feedback si l’utilisateur n’a fixé qu’une borne
+    if isinstance(raw_sel, _dt.date):
+        st.info("Plage incomplète détectée : j’ai fixé une plage d’un jour.", icon="ℹ️")
 
 with col2:
     user_filter = st.text_input("Email contient…")

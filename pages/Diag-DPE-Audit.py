@@ -212,6 +212,11 @@ def generate_histogram():
         # Préparer les données pour le graphique
         chart_df = prepare_chart_data(monthly_data)
         
+        # Vérifier que le DataFrame n'est pas vide
+        if chart_df.empty:
+            st.error("Aucune donnée disponible pour générer l'histogramme")
+            return None, None, None
+        
         # Créer l'histogramme avec Plotly (utiliser directement chart_df qui a déjà les bons labels)
         fig = px.bar(
             chart_df,

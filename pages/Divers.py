@@ -2,6 +2,7 @@ import streamlit as st
 from src.auth_guard import require_login 
 require_login()
 import plotly.express as px
+from zoneinfo import ZoneInfo
 import pandas as pd
 import numpy as np
 import datetime as _dt
@@ -21,19 +22,78 @@ if df.empty:
 # ------------------------------------------------------------------
 # Filtres minimalistes (mêmes valeurs par défaut que Home)
 # ------------------------------------------------------------------
-earliest_dt  = _dt.date(2025, 6, 1)
-default_end  = df["timestamp"].max().date()
+earliest_dt   = _dt.date(2025, 6, 1)
+today_local   = _dt.datetime.now(ZoneInfo("Europe/Paris")).date()
 default_start = earliest_dt
+default_end   = today_local
+calendar_max  = today_local
+
+def _normalize_date_range(
+    sel,
+    *,
+    prev: tuple[_dt.date, _dt.date] | None,
+    default_start: _dt.date,
+    default_end: _dt.date,
+    min_value: _dt.date,
+    max_value: _dt.date,
+) -> tuple[_dt.date, _dt.date]:
+    def _to_date(x):
+        if isinstance(x, _dt.datetime):
+            return x.date()
+        if isinstance(x, _dt.date):
+            return x
+        return None
+
+    if isinstance(sel, (list, tuple)):
+        items = []
+        for it in sel:
+            if isinstance(it, (list, tuple)):
+                items.extend(list(it))
+            else:
+                items.append(it)
+    else:
+        items = [sel]
+
+    a = _to_date(items[0]) if len(items) >= 1 else None
+    b = _to_date(items[1]) if len(items) >= 2 else None
+
+    if a is None and b is None:
+        a, b = default_start, default_end
+    elif a is None:
+        a = prev[0] if prev else default_start
+    elif b is None:
+        b = prev[1] if prev else a
+
+    minv = _to_date(min_value) or default_start
+    maxv = _to_date(max_value) or default_end
+
+    a = max(minv, min(maxv, _to_date(a) or default_end))
+    b = max(minv, min(maxv, _to_date(b) or default_end))
+
+    if b < a:
+        a, b = b, a
+    return a, b
 
 col1, col2 = st.columns(2)
 with col1:
-    start_date, end_date = st.date_input(
+    raw_sel = st.date_input(
         "Période",
         value=(default_start, default_end),
-        min_value=earliest_dt,
-        max_value=default_end,
+        min_value=default_start,
+        max_value=calendar_max,
         format="DD/MM/YYYY",
+        key="divers_period",
     )
+    start_date, end_date = _normalize_date_range(
+        raw_sel,
+        prev=st.session_state.get("_divers_period_last"),
+        default_start=default_start,
+        default_end=default_end,
+        min_value=default_start,
+        max_value=calendar_max,
+    )
+    st.session_state["_divers_period_last"] = (start_date, end_date)
+
 with col2:
     user_filter = st.text_input("Email contient…")
 
