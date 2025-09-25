@@ -331,7 +331,7 @@ if exclude_test:
 # T5 – Tableau complet
 # ------------------------------------------------------------------
 # Filtrer pour ne garder que les vrais prompts (POST message), pas les exports Liciel
-_MESSAGE_ROUTE = r"POST /project/.+/message"
+_MESSAGE_ROUTE = r"POST /projects/.+/message"  # Corrigé: projects au pluriel
 prompts_only_df = filt_df[filt_df["span_name"].str.contains(_MESSAGE_ROUTE, na=False, regex=True)].copy()
 
 st.subheader(f"T5  •  Tous les prompts ({len(prompts_only_df)})")
@@ -394,7 +394,7 @@ st.dataframe(
 # T5 bis – Tableau des exports Liciel
 # ------------------------------------------------------------------
 # Filtrer pour ne garder que les exports Liciel
-_LICIEL_ROUTE = r"GET /project/.+/liciel"
+_LICIEL_ROUTE = r"GET /projects/.+/liciel"  # Corrigé: projects au pluriel
 exports_only_df = filt_df[filt_df["span_name"].str.contains(_LICIEL_ROUTE, na=False, regex=True)].copy()
 
 st.subheader(f"T5 bis  •  Tous les exports Liciel ({len(exports_only_df)})")
@@ -659,7 +659,7 @@ nb_semaines_exp = st.slider(
 )
 
 # 1. Filtre « exports Liciel »
-_LICIEL_ROUTE = r"GET /project/.+/liciel"
+_LICIEL_ROUTE = r"GET /projects/.+/liciel"  # Corrigé: projects au pluriel
 liciel_df = filt_df[filt_df["span_name"].str.contains(_LICIEL_ROUTE, na=False, regex=True)].copy()
 
 if liciel_df.empty:

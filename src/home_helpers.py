@@ -66,7 +66,7 @@ def daily_active_users(df: pd.DataFrame) -> pd.DataFrame:
 # ------------------------------------------------------------------
 #  Exports Liciel / semaine
 # ------------------------------------------------------------------
-_LICIEL_ROUTE = r"GET /project/.+/liciel"          # pattern trouvé dans Logfire
+_LICIEL_ROUTE = r"GET /projects/.+/liciel"          # pattern trouvé dans Logfire
 
 def weekly_liciel_exports(df: pd.DataFrame) -> pd.DataFrame:
     """

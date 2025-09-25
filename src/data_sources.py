@@ -60,8 +60,8 @@ SELECT
 FROM   records r
 LEFT JOIN success_spans s USING(trace_id)
 WHERE  (
-          r.span_name ILIKE 'POST /project/%/message'   -- prompts
-       OR r.span_name ILIKE 'GET /project/%/liciel%'    -- exports Liciel
+          r.span_name ILIKE 'POST /projects/%/message'   -- prompts (corrigé: projects au pluriel)
+       OR r.span_name ILIKE 'GET /projects/%/liciel%'    -- exports Liciel (corrigé: projects au pluriel)
       )
   AND  r.project_id = '{project_guid}'
   AND  {date_filter}
