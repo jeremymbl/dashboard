@@ -10,12 +10,11 @@ import streamlit as st
 from typing import List, Dict, Any
 from datetime import datetime
 import base64
-from io import BytesIO
 
 
 def get_bucket_images(limit: int = 50) -> List[Dict[str, Any]]:
     """
-    Récupère toutes les images du bucket privé.
+    Récupère toutes les images du bucket project-files.
     
     Returns:
         List[Dict]: Liste des images avec leurs métadonnées
@@ -26,7 +25,7 @@ def get_bucket_images(limit: int = 50) -> List[Dict[str, Any]]:
     except:
         return []
     
-    BUCKET_NAME = "private"
+    BUCKET_NAME = "project-files"
     all_images = []
     
     # 1. Récupère la liste des projets
@@ -37,18 +36,19 @@ def get_bucket_images(limit: int = 50) -> List[Dict[str, Any]]:
         if not project_id:
             continue
         
-        # 2. Explore le dossier photos de chaque projet
-        photos_path = f"{project_id}/photos/"
-        photos = _list_bucket_objects(SUPABASE_URL, SERVICE_ROLE_KEY, BUCKET_NAME, photos_path)
+        # 2. Explore le dossier input/image/ de chaque projet
+        images_path = f"{project_id}/input/image/"
+        images = _list_bucket_objects(SUPABASE_URL, SERVICE_ROLE_KEY, BUCKET_NAME, images_path)
         
-        for photo in photos:
-            if photo.get('metadata') and _is_image_file(photo.get('name', '')):
+        for image in images:
+            if image.get('metadata') and _is_image_file(image.get('name', '')):
                 # Enrichit avec les infos du projet
-                photo['project_id'] = project_id
-                # Le chemin complet inclut project_id/photos/filename
-                full_path = f"{project_id}/photos/{photo.get('name', '')}"
-                photo['image_url'] = _get_image_url(SUPABASE_URL, BUCKET_NAME, full_path)
-                all_images.append(photo)
+                image['project_id'] = project_id
+                # Le chemin complet doit inclure project_id/input/image/filename
+                image_filename = image.get('name', '').split('/')[-1]  # Extrait juste le nom du fichier
+                full_path = f"{project_id}/input/image/{image_filename}"
+                image['image_url'] = _get_image_url(SUPABASE_URL, BUCKET_NAME, full_path)
+                all_images.append(image)
     
     # Trie par date de création (plus récent en premier)
     all_images.sort(key=lambda x: x.get('created_at', ''), reverse=True)
@@ -114,6 +114,10 @@ def _get_image_url(supabase_url: str, bucket: str, object_path: str) -> str:
         return f"data:{content_type};base64,{image_base64}"
             
     except Exception as e:
+        # Debug: afficher l'erreur dans les logs Streamlit
+        st.error(f"Erreur téléchargement image {object_path}: {str(e)}")
+        print(f"DEBUG - Erreur image {object_path}: {str(e)}")
+        print(f"DEBUG - URL: {download_url}")
         # En cas d'erreur, retourne une URL d'image placeholder
         return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZGRkIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNCIgZmlsbD0iIzk5OSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkVycmV1cjwvdGV4dD48L3N2Zz4="
 
