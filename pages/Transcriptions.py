@@ -1,4 +1,3 @@
-import json
 import datetime as _dt
 from typing import List, Optional
 from zoneinfo import ZoneInfo
@@ -33,7 +32,7 @@ def load_data(schema: str = "auditoo") -> pd.DataFrame:
         sb.schema(schema).table("transcription_requests").select("*").execute().data or []
     )
     res_df = pd.DataFrame(
-        sb.schema(schema).table("transcription_results").select("*").execute().data or []
+        sb.schema(schema).table("transcription_jobs").select("*").execute().data or []
     )
     resp_df = pd.DataFrame(
         sb.schema(schema).table("transcription_responses").select("*").execute().data or []
@@ -262,3 +261,229 @@ fig_lat = px.box(
 )
 fig_lat.update_layout(margin=dict(l=0, r=0, t=40, b=0))
 st.plotly_chart(fig_lat, use_container_width=True)
+
+# ------------------------------------------------------------------
+# 5. Detailed comparison table: all models per prompt
+# ------------------------------------------------------------------
+st.subheader("Comparaison détaillée par prompt")
+
+def fetch_all_rows(sb, schema: str, table_name: str, select: str = "*") -> list:
+    """Fetch all rows from a table using pagination to avoid 1000-row limit."""
+    all_data = []
+    offset = 0
+    batch_size = 1000
+
+    while True:
+        batch = sb.schema(schema).table(table_name).select(select).range(offset, offset + batch_size - 1).execute().data
+        if not batch:
+            break
+        all_data.extend(batch)
+        if len(batch) < batch_size:
+            break
+        offset += batch_size
+
+    return all_data
+
+@st.cache_data(ttl=300)
+def load_detailed_comparison(schema: str = "auditoo") -> pd.DataFrame:
+    """Load all jobs with request and response info for detailed comparison."""
+    sb = get_supabase()
+
+    # Get all tables with pagination
+    requests_df = pd.DataFrame(fetch_all_rows(sb, schema, "transcription_requests"))
+    jobs_df = pd.DataFrame(fetch_all_rows(sb, schema, "transcription_jobs"))
+    responses_df = pd.DataFrame(fetch_all_rows(sb, schema, "transcription_responses"))
+    files_df = pd.DataFrame(fetch_all_rows(sb, schema, "project_files"))
+
+    if requests_df.empty or jobs_df.empty:
+        return pd.DataFrame()
+
+    # Merge to get winning job IDs
+    if not responses_df.empty:
+        winner_map = responses_df.set_index('transcription_request_id')['transcription_result_id'].to_dict()
+    else:
+        winner_map = {}
+
+    # Get user info
+    users_df = pd.DataFrame(fetch_all_rows(sb, schema, 'users', 'id, email'))
+
+    # Merge jobs with requests
+    comparison_df = jobs_df.merge(
+        requests_df[['id', 'received_at', 'audio_duration', 'file_id', 'user_id']],
+        left_on='transcription_request_id',
+        right_on='id',
+        how='left',
+        suffixes=('', '_request')
+    )
+
+    # Merge with users to get email
+    if not users_df.empty:
+        comparison_df = comparison_df.merge(
+            users_df[['id', 'email']],
+            left_on='user_id',
+            right_on='id',
+            how='left',
+            suffixes=('', '_user')
+        )
+
+    # Merge with files to get storage path
+    if not files_df.empty:
+        comparison_df = comparison_df.merge(
+            files_df[['id', 'storage_path']],
+            left_on='file_id',
+            right_on='id',
+            how='left',
+            suffixes=('', '_file')
+        )
+
+    # Add winner indicator
+    comparison_df['is_winner'] = comparison_df.apply(
+        lambda row: row['id'] == winner_map.get(row['transcription_request_id'], None),
+        axis=1
+    )
+
+    # Parse timestamps
+    comparison_df['received_at'] = pd.to_datetime(comparison_df['received_at'], errors='coerce')
+    comparison_df['requested_at'] = pd.to_datetime(comparison_df['requested_at'], errors='coerce')
+    comparison_df['responded_at'] = pd.to_datetime(comparison_df['responded_at'], errors='coerce')
+
+    return comparison_df
+
+detailed_df = load_detailed_comparison()
+
+if not detailed_df.empty:
+    # Apply the same date filter
+    detail_mask = (
+        (detailed_df['received_at'].dt.date >= start_date) &
+        (detailed_df['received_at'].dt.date <= end_date)
+    )
+    if eng_sel != "Tous":
+        detail_mask &= detailed_df['model'].str.lower() == eng_sel
+
+    detail_sub = detailed_df[detail_mask].copy()
+
+    if not detail_sub.empty:
+        # Get all unique models
+        all_models = sorted(detail_sub['model'].unique())
+
+        # Create display table (without generating signed URLs upfront)
+        display_data = []
+        storage_paths = {}  # Store storage paths for later audio playback
+
+        for req_id, group in detail_sub.groupby('transcription_request_id'):
+            # Get basic info from first row
+            first_row = group.iloc[0]
+
+            # Store storage path for this request (don't generate URL yet)
+            storage_path = first_row.get('storage_path')
+            if pd.notna(storage_path):
+                storage_paths[str(req_id)] = storage_path
+
+            row_data = {
+                'Request ID': str(req_id),
+                'Author': first_row.get('email', '') or '',
+                'Request Time': first_row['received_at'].strftime('%Y-%m-%d %H:%M:%S') if pd.notna(first_row['received_at']) else '',
+                'Audio Duration': f"{first_row['audio_duration']:.2f}s" if pd.notna(first_row['audio_duration']) else '',
+            }
+
+            # Create a mapping of model -> (text, duration, is_winner)
+            model_data = {}
+            for _, job in group.iterrows():
+                model_name = job['model']
+                duration = job['duration']
+                text = job['text'] or ''
+                is_winner = job['is_winner']
+
+                # Use full text (no truncation)
+                text_display = text
+                model_data[model_name] = (text_display, duration, is_winner)
+
+            # Add columns for each model
+            for model in all_models:
+                if model in model_data:
+                    text_display, duration, is_winner = model_data[model]
+                    row_data[model] = (f"[{duration:.2f}s] {text_display}", is_winner)
+                else:
+                    row_data[model] = ('', False)
+
+            display_data.append(row_data)
+
+        if display_data:
+            # Separate data and styling info
+            table_data = {}
+            winner_info = {}
+
+            for col in display_data[0].keys():
+                if col in ['Request ID', 'Author', 'Request Time', 'Audio Duration']:
+                    table_data[col] = [row[col] for row in display_data]
+                else:
+                    table_data[col] = [row[col][0] if isinstance(row[col], tuple) else row[col] for row in display_data]
+                    winner_info[col] = [row[col][1] if isinstance(row[col], tuple) else False for row in display_data]
+
+            comparison_table = pd.DataFrame(table_data)
+
+            # Apply styling
+            def highlight_winners(row):
+                styles = [''] * len(row)
+                for idx, col in enumerate(comparison_table.columns):
+                    if col in winner_info and winner_info[col][row.name]:
+                        styles[idx] = 'background-color: #4CAF50; color: white'
+                return styles
+
+            styled_table = comparison_table.style.apply(highlight_winners, axis=1)
+
+            st.dataframe(
+                styled_table,
+                use_container_width=True,
+                height=600,
+            )
+
+            st.caption("Les cellules en vert indiquent le modèle sélectionné pour la réponse finale. Format: [durée] transcription")
+
+            # Audio player section - only generates signed URL on demand
+            st.markdown("---")
+            st.subheader("🔊 Écouter l'audio")
+
+            if storage_paths:
+                col1, col2 = st.columns([2, 1])
+
+                with col1:
+                    text_req_id = st.text_input(
+                        "Request ID:",
+                        value="",
+                        placeholder="Collez un Request ID ici",
+                        key="audio_text_input"
+                    )
+
+                with col2:
+                    dropdown_req_id = st.selectbox(
+                        "Ou sélectionnez:",
+                        options=[""] + list(storage_paths.keys()),
+                        format_func=lambda x: f"{x[:8]}..." if x and len(x) > 8 else ("--" if not x else x),
+                        key="audio_dropdown"
+                    )
+
+                # Determine which Request ID to use (text input takes priority)
+                selected_req_id = text_req_id.strip() if text_req_id.strip() else dropdown_req_id
+
+                # Auto-load audio when Request ID is provided
+                if selected_req_id and selected_req_id in storage_paths:
+                    storage_path = storage_paths[selected_req_id]
+                    try:
+                        sb = get_supabase()
+                        signed_url_data = sb.storage.from_('project-files').create_signed_url(storage_path, 3600)
+                        audio_url = signed_url_data.get('signedURL') or signed_url_data.get('signedUrl')
+                        if audio_url:
+                            st.audio(audio_url)
+                        else:
+                            st.error("Impossible de générer l'URL audio")
+                    except Exception as e:
+                        st.error(f"Erreur lors du chargement de l'audio: {str(e)}")
+                elif selected_req_id:
+                    st.warning("Request ID non trouvé dans les résultats affichés")
+            else:
+                st.info("Aucun fichier audio disponible pour les requêtes affichées")
+    else:
+        st.info("Aucune donnée de comparaison disponible pour les filtres sélectionnés.")
+else:
+    st.warning("Impossible de charger les données de comparaison détaillée.")
