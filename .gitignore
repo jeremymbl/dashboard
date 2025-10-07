@@ -27,3 +27,5 @@ src/dashboard.egg-info/
 .python-version
 uv.lock
 uv.lock
+.env.claude
+.claude/
