@@ -1,4 +1,5 @@
 import datetime as _dt
+from difflib import SequenceMatcher
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
@@ -231,36 +232,36 @@ agg = (
        .sort_values("n_calls", ascending=False)
 )
 
-# ------------------------------------------------------------------------
-# Mises à jour de l’affichage
-# ------------------------------------------------------------------------
-st.subheader("Tableau comparatif des moteurs")
-st.dataframe(
-    agg.style.format({
-        "avg_lat": "{:.2f} s",
-        "med_lat": "{:.2f} s",
-        "p90_lat": "{:.2f} s",
-    }),
-    use_container_width=True,
-)
+# # ------------------------------------------------------------------------
+# # Mises à jour de l’affichage
+# # ------------------------------------------------------------------------
+# st.subheader("Tableau comparatif des moteurs")
+# st.dataframe(
+#     agg.style.format({
+#         "avg_lat": "{:.2f} s",
+#         "med_lat": "{:.2f} s",
+#         "p90_lat": "{:.2f} s",
+#     }),
+#     use_container_width=True,
+# )
 
 
-st.subheader("Volume des requêtes par moteur")
-fig_calls = px.bar(
-    agg.reset_index(),
-    x="engine", y="n_calls", text_auto=True,
-    labels={"engine": "Moteur", "n_calls": "Requêtes"},
-)
-fig_calls.update_layout(margin=dict(l=0, r=0, t=40, b=0))
-st.plotly_chart(fig_calls, use_container_width=True)
+# st.subheader("Volume des requêtes par moteur")
+# fig_calls = px.bar(
+#     agg.reset_index(),
+#     x="engine", y="n_calls", text_auto=True,
+#     labels={"engine": "Moteur", "n_calls": "Requêtes"},
+# )
+# fig_calls.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+# st.plotly_chart(fig_calls, use_container_width=True)
 
-st.subheader("Distribution des latences")
-fig_lat = px.box(
-    sub, x="engine", y="latency_s",
-    labels={"engine": "Moteur", "latency_s": "Latence (s)"},
-)
-fig_lat.update_layout(margin=dict(l=0, r=0, t=40, b=0))
-st.plotly_chart(fig_lat, use_container_width=True)
+# st.subheader("Distribution des latences")
+# fig_lat = px.box(
+#     sub, x="engine", y="latency_s",
+#     labels={"engine": "Moteur", "latency_s": "Latence (s)"},
+# )
+# fig_lat.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+# st.plotly_chart(fig_lat, use_container_width=True)
 
 # ------------------------------------------------------------------
 # 5. Detailed comparison table: all models per prompt
@@ -351,6 +352,9 @@ def load_detailed_comparison(schema: str = "auditoo") -> pd.DataFrame:
 
 detailed_df = load_detailed_comparison()
 
+# Build storage_paths globally for sidebar access
+storage_paths = {}
+
 if not detailed_df.empty:
     # Apply the same date filter
     detail_mask = (
@@ -363,21 +367,60 @@ if not detailed_df.empty:
     detail_sub = detailed_df[detail_mask].copy()
 
     if not detail_sub.empty:
+        # Build storage_paths from detail_sub
+        for req_id, group in detail_sub.groupby('transcription_request_id'):
+            first_row = group.iloc[0]
+            storage_path = first_row.get('storage_path')
+            if pd.notna(storage_path):
+                storage_paths[str(req_id)] = storage_path
+
+# ------------------------------------------------------------------
+# Sidebar Audio Player
+# ------------------------------------------------------------------
+if storage_paths:
+    with st.sidebar:
+        st.markdown("---")
+        st.subheader("🔊 Audio Player")
+
+        # Use session state to auto-load from "Charger" buttons
+        default_req_id = st.session_state.get("loaded_request_id", "")
+
+        sidebar_req_id = st.text_input(
+            "Request ID:",
+            value=default_req_id,
+            placeholder="Collez un Request ID ici",
+            key="sidebar_audio_input"
+        )
+
+        if sidebar_req_id.strip() and sidebar_req_id.strip() in storage_paths:
+            storage_path = storage_paths[sidebar_req_id.strip()]
+            try:
+                sb = get_supabase()
+                signed_url_data = sb.storage.from_('project-files').create_signed_url(storage_path, 3600)
+                audio_url = signed_url_data.get('signedURL') or signed_url_data.get('signedUrl')
+                if audio_url:
+                    st.audio(audio_url)
+                else:
+                    st.error("Impossible de générer l'URL audio")
+            except Exception as e:
+                st.error(f"Erreur: {str(e)}")
+        elif sidebar_req_id.strip():
+            st.warning("Request ID non trouvé")
+
+# ------------------------------------------------------------------
+# 5. Detailed comparison table: all models per prompt (continued)
+# ------------------------------------------------------------------
+if not detailed_df.empty and not detail_sub.empty:
+    if not detail_sub.empty:
         # Get all unique models
         all_models = sorted(detail_sub['model'].unique())
 
         # Create display table (without generating signed URLs upfront)
         display_data = []
-        storage_paths = {}  # Store storage paths for later audio playback
 
         for req_id, group in detail_sub.groupby('transcription_request_id'):
             # Get basic info from first row
             first_row = group.iloc[0]
-
-            # Store storage path for this request (don't generate URL yet)
-            storage_path = first_row.get('storage_path')
-            if pd.notna(storage_path):
-                storage_paths[str(req_id)] = storage_path
 
             row_data = {
                 'Request ID': str(req_id),
@@ -439,51 +482,543 @@ if not detailed_df.empty:
             )
 
             st.caption("Les cellules en vert indiquent le modèle sélectionné pour la réponse finale. Format: [durée] transcription")
-
-            # Audio player section - only generates signed URL on demand
-            st.markdown("---")
-            st.subheader("🔊 Écouter l'audio")
-
-            if storage_paths:
-                col1, col2 = st.columns([2, 1])
-
-                with col1:
-                    text_req_id = st.text_input(
-                        "Request ID:",
-                        value="",
-                        placeholder="Collez un Request ID ici",
-                        key="audio_text_input"
-                    )
-
-                with col2:
-                    dropdown_req_id = st.selectbox(
-                        "Ou sélectionnez:",
-                        options=[""] + list(storage_paths.keys()),
-                        format_func=lambda x: f"{x[:8]}..." if x and len(x) > 8 else ("--" if not x else x),
-                        key="audio_dropdown"
-                    )
-
-                # Determine which Request ID to use (text input takes priority)
-                selected_req_id = text_req_id.strip() if text_req_id.strip() else dropdown_req_id
-
-                # Auto-load audio when Request ID is provided
-                if selected_req_id and selected_req_id in storage_paths:
-                    storage_path = storage_paths[selected_req_id]
-                    try:
-                        sb = get_supabase()
-                        signed_url_data = sb.storage.from_('project-files').create_signed_url(storage_path, 3600)
-                        audio_url = signed_url_data.get('signedURL') or signed_url_data.get('signedUrl')
-                        if audio_url:
-                            st.audio(audio_url)
-                        else:
-                            st.error("Impossible de générer l'URL audio")
-                    except Exception as e:
-                        st.error(f"Erreur lors du chargement de l'audio: {str(e)}")
-                elif selected_req_id:
-                    st.warning("Request ID non trouvé dans les résultats affichés")
-            else:
-                st.info("Aucun fichier audio disponible pour les requêtes affichées")
     else:
         st.info("Aucune donnée de comparaison disponible pour les filtres sélectionnés.")
 else:
     st.warning("Impossible de charger les données de comparaison détaillée.")
+
+# ------------------------------------------------------------------
+# 6. Racing Strategy Analysis: Is waiting for "better" models worth it?
+# ------------------------------------------------------------------
+st.markdown("---")
+st.subheader("🏁 Analyse de la stratégie de racing")
+
+if not detailed_df.empty and not detail_sub.empty:
+    # For each request, find fastest job vs winning job
+    racing_analysis = []
+
+    for req_id, group in detail_sub.groupby('transcription_request_id'):
+        if len(group) < 2:  # Need at least 2 models to compare
+            continue
+
+        # Calculate duration for each job
+        group['job_duration'] = (group['responded_at'] - group['requested_at']).dt.total_seconds()
+
+        # Find fastest and winner
+        fastest_idx = group['job_duration'].idxmin()
+        fastest_job = group.loc[fastest_idx]
+
+        winner_job = group[group['is_winner']]
+        if winner_job.empty:
+            continue
+        winner_job = winner_job.iloc[0]
+
+        time_wasted = winner_job['job_duration'] - fastest_job['job_duration']
+
+        # Calculate similarity between fastest and winner
+        fastest_text = fastest_job['text'] or ''
+        winner_text = winner_job['text'] or ''
+        similarity_ratio = SequenceMatcher(None, fastest_text, winner_text).ratio()
+
+        racing_analysis.append({
+            'request_id': req_id,
+            'fastest_model': fastest_job['model'],
+            'fastest_duration': fastest_job['job_duration'],
+            'fastest_text': fastest_text,
+            'winner_model': winner_job['model'],
+            'winner_duration': winner_job['job_duration'],
+            'winner_text': winner_text,
+            'time_wasted': time_wasted,
+            'winner_is_fastest': fastest_job['model'] == winner_job['model'],
+            'similarity_ratio': similarity_ratio,
+            'texts_identical': fastest_text == winner_text,
+            'char_diff': abs(len(fastest_text) - len(winner_text)),
+        })
+
+    if racing_analysis:
+        race_df = pd.DataFrame(racing_analysis)
+
+        # Calculate key metrics
+        pct_different = (100 * (~race_df['winner_is_fastest']).sum() / len(race_df))
+        cases_where_waited = race_df[~race_df['winner_is_fastest']]
+        median_wasted = cases_where_waited['time_wasted'].median() if not cases_where_waited.empty else 0
+        total_wasted = cases_where_waited['time_wasted'].sum() if not cases_where_waited.empty else 0
+
+        # Display key metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                "Stratégie utilisée",
+                f"{pct_different:.1f}%",
+                help="Pourcentage de cas où on a attendu un modèle plus lent que le plus rapide"
+            )
+        with col2:
+            st.metric(
+                "Temps médian perdu",
+                f"{median_wasted:.2f}s",
+                help="Temps médian d'attente supplémentaire quand on choisit un modèle plus lent"
+            )
+        # with col3:
+        #     st.metric(
+        #         "Temps total perdu",
+        #         f"{total_wasted:.1f}s",
+        #         help="Temps total qui aurait pu être économisé en prenant toujours le plus rapide"
+        #     )
+
+        # # Time wasted distribution
+        # if not cases_where_waited.empty:
+        #     st.markdown("### Distribution du temps perdu")
+        #     fig_wasted = px.box(
+        #         cases_where_waited,
+        #         y='time_wasted',
+        #         labels={'time_wasted': 'Temps perdu (s)'},
+        #         title=f"Quand la stratégie est utilisée ({len(cases_where_waited)} cas)"
+        #     )
+        #     fig_wasted.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+        #     st.plotly_chart(fig_wasted, use_container_width=True)
+
+        # Winner vs Fastest breakdown
+        st.markdown("### Quel modèle gagne vs. quel modèle est le plus rapide ?")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            fastest_counts = race_df['fastest_model'].value_counts().reset_index()
+            fastest_counts.columns = ['Modèle', 'Nombre de fois le plus rapide']
+            fig_fastest = px.bar(
+                fastest_counts,
+                x='Modèle', y='Nombre de fois le plus rapide',
+                text_auto=True,
+                title="Modèles les plus rapides"
+            )
+            fig_fastest.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+            st.plotly_chart(fig_fastest, use_container_width=True)
+
+        with col2:
+            winner_counts = race_df['winner_model'].value_counts().reset_index()
+            winner_counts.columns = ['Modèle', 'Nombre de victoires']
+            fig_winner = px.bar(
+                winner_counts,
+                x='Modèle', y='Nombre de victoires',
+                text_auto=True,
+                title="Modèles gagnants"
+            )
+            fig_winner.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+            st.plotly_chart(fig_winner, use_container_width=True)
+
+        # Quality comparison samples
+        st.markdown("### Exemples de comparaison qualité (quand le gagnant ≠ le plus rapide)")
+
+        if not cases_where_waited.empty:
+            # Global metrics for quality comparison
+            st.markdown("#### 📊 Métriques globales")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric(
+                    "Échantillons",
+                    len(cases_where_waited),
+                    help="Nombre de cas où on a attendu un modèle plus lent"
+                )
+
+            with col2:
+                highly_similar_pct = 100 * (cases_where_waited['similarity_ratio'] >= 0.95).sum() / len(cases_where_waited)
+                st.metric(
+                    "Très similaires",
+                    f"{highly_similar_pct:.1f}%",
+                    help="Pourcentage de textes avec >95% de similarité (fuzzy matching)"
+                )
+
+            with col3:
+                avg_similarity = 100 * cases_where_waited['similarity_ratio'].mean()
+                st.metric(
+                    "Similarité moyenne",
+                    f"{avg_similarity:.1f}%",
+                    help="Score moyen de similarité fuzzy entre le plus rapide et le gagnant"
+                )
+
+            with col4:
+                avg_time_wasted = cases_where_waited['time_wasted'].mean()
+                st.metric(
+                    "Temps perdu moyen",
+                    f"{avg_time_wasted:.2f}s",
+                    help="Temps moyen perdu en attendant le gagnant au lieu du plus rapide"
+                )
+
+            # Second row: Additional details
+            st.caption(f"📝 Textes exactement identiques: {100 * cases_where_waited['texts_identical'].sum() / len(cases_where_waited):.1f}% | "
+                       f"Diff. caractères moyenne: {cases_where_waited['char_diff'].mean():.1f}")
+
+            st.markdown("---")
+
+
+            # Show top 10 cases by time wasted
+            sample_cases = cases_where_waited.nlargest(min(10, len(cases_where_waited)), 'time_wasted')
+
+            for idx, row in sample_cases.iterrows():
+                full_req_id = str(row['request_id'])
+
+                # Calculate similarity badge
+                similarity_pct = row['similarity_ratio'] * 100
+                if row['texts_identical']:
+                    similarity_badge = "✅ IDENTIQUE (100%)"
+                elif similarity_pct >= 95:
+                    similarity_badge = f"🟢 TRÈS SIMILAIRE ({similarity_pct:.1f}%)"
+                elif similarity_pct >= 90:
+                    similarity_badge = f"🟡 SIMILAIRE ({similarity_pct:.1f}%)"
+                else:
+                    similarity_badge = f"🔴 DIFFÉRENT ({similarity_pct:.1f}%)"
+
+                latency_info = (
+                    f"⚡ {row['fastest_model']} ({row['fastest_duration']:.2f}s) vs "
+                    f"🏆 {row['winner_model']} ({row['winner_duration']:.2f}s) | "
+                    f"⏱️ +{row['time_wasted']:.2f}s"
+                )
+
+                with st.expander(
+                    f"{similarity_badge} | Request {full_req_id[:8]}... | {latency_info}"
+                ):
+                    # Display Request ID with "Charger" button
+                    col_id, col_btn = st.columns([3, 1])
+                    with col_id:
+                        st.caption(f"**Request ID:** `{full_req_id}`")
+                    with col_btn:
+                        if st.button("🔊 Charger", key=f"load_audio_racing_{idx}"):
+                            st.session_state.loaded_request_id = full_req_id
+                            st.rerun()
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown(f"**⚡ Plus rapide: {row['fastest_model']}** ({row['fastest_duration']:.2f}s)")
+                        st.text_area(
+                            "Transcription",
+                            value=row['fastest_text'],
+                            height=200,
+                            key=f"fastest_{idx}",
+                            disabled=True
+                        )
+                        st.caption(f"Longueur: {len(row['fastest_text'])} caractères")
+                    with col2:
+                        st.markdown(f"**🏆 Gagnant: {row['winner_model']}** ({row['winner_duration']:.2f}s)")
+                        st.text_area(
+                            "Transcription",
+                            value=row['winner_text'],
+                            height=200,
+                            key=f"winner_{idx}",
+                            disabled=True
+                        )
+                        st.caption(f"Longueur: {len(row['winner_text'])} caractères")
+
+                    # Show similarity info
+                    st.markdown("**Analyse:**")
+                    st.caption(f"• Similarité fuzzy: {similarity_pct:.1f}%")
+                    st.caption(f"• Différence de caractères: {row['char_diff']}")
+                    st.caption(f"• Temps perdu en attendant le gagnant: {row['time_wasted']:.2f}s")
+
+        # # Recommendation summary
+        # st.markdown("### 📊 Conclusion")
+
+        # if pct_different < 10:
+        #     st.success(
+        #         f"✅ **Le modèle le plus rapide gagne {100-pct_different:.1f}% du temps.** "
+        #         f"La stratégie de racing n'est probablement pas utile."
+        #     )
+        # elif pct_different < 30:
+        #     st.info(
+        #         f"🤔 **La stratégie est utilisée dans {pct_different:.1f}% des cas.** "
+        #         f"Temps médian perdu: {median_wasted:.2f}s. "
+        #         f"Vérifiez si les différences de qualité justifient cette latence."
+        #     )
+        # else:
+        #     st.warning(
+        #         f"⚠️ **La stratégie est utilisée dans {pct_different:.1f}% des cas.** "
+        #         f"Temps médian perdu: {median_wasted:.2f}s. "
+        #         f"Si les différences de qualité sont minimes, considérez utiliser uniquement le modèle le plus rapide."
+        #     )
+
+        # # Additional insight
+        # if not cases_where_waited.empty:
+        #     avg_wasted = cases_where_waited['time_wasted'].mean()
+        #     st.caption(
+        #         f"💡 En moyenne, quand on attend un meilleur modèle, on perd {avg_wasted:.2f}s par requête. "
+        #         f"Sur {len(cases_where_waited)} cas, cela représente {total_wasted:.1f}s au total."
+        #     )
+    else:
+        st.info("Pas assez de données pour analyser la stratégie de racing.")
+else:
+    st.info("Aucune donnée disponible pour l'analyse de racing.")
+
+# ------------------------------------------------------------------
+# 7. GPT-4o vs GPT-4o-mini Quality Comparison Tool
+# ------------------------------------------------------------------
+st.markdown("---")
+st.subheader("🔬 Comparaison qualité: GPT-4o vs GPT-4o-mini")
+
+if not detailed_df.empty and not detail_sub.empty:
+    # Find requests where both GPT-4o and GPT-4o-mini completed successfully
+    comparison_pairs = []
+
+    def calculate_similarity(text1: str, text2: str) -> float:
+        """Calculate fuzzy similarity ratio between two texts (0.0 to 1.0)"""
+        return SequenceMatcher(None, text1, text2).ratio()
+
+    for req_id, group in detail_sub.groupby('transcription_request_id'):
+        # Look for both models in this request
+        gpt4o = group[group['model'] == 'openai:gpt-4o-transcribe']
+        gpt4o_mini = group[group['model'] == 'openai:gpt-4o-mini-transcribe']
+
+        if not gpt4o.empty and not gpt4o_mini.empty:
+            gpt4o_row = gpt4o.iloc[0]
+            mini_row = gpt4o_mini.iloc[0]
+
+            # Calculate duration
+            gpt4o_duration = (gpt4o_row['responded_at'] - gpt4o_row['requested_at']).total_seconds()
+            mini_duration = (mini_row['responded_at'] - mini_row['requested_at']).total_seconds()
+
+            gpt4o_text = gpt4o_row['text'] or ''
+            mini_text = mini_row['text'] or ''
+
+            # Calculate fuzzy similarity
+            similarity_ratio = calculate_similarity(gpt4o_text, mini_text)
+
+            comparison_pairs.append({
+                'request_id': req_id,
+                'gpt4o_text': gpt4o_text,
+                'mini_text': mini_text,
+                'gpt4o_duration': gpt4o_duration,
+                'mini_duration': mini_duration,
+                'latency_diff': gpt4o_duration - mini_duration,
+                'char_diff': abs(len(gpt4o_text) - len(mini_text)),
+                'texts_identical': gpt4o_text == mini_text,
+                'similarity_ratio': similarity_ratio,
+                'highly_similar': similarity_ratio >= 0.95,  # Consider 95%+ as highly similar
+            })
+
+    if comparison_pairs:
+        comp_df = pd.DataFrame(comparison_pairs)
+
+        # Overall metrics
+        st.markdown("### 📊 Métriques globales")
+
+        # First row: Main metrics
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric(
+                "Échantillons",
+                len(comp_df),
+                help="Nombre de requêtes où les deux modèles ont répondu"
+            )
+
+        with col2:
+            highly_similar_pct = 100 * comp_df['highly_similar'].sum() / len(comp_df)
+            st.metric(
+                "Très similaires",
+                f"{highly_similar_pct:.1f}%",
+                help="Pourcentage de textes avec >95% de similarité (fuzzy matching)"
+            )
+
+        with col3:
+            avg_similarity = 100 * comp_df['similarity_ratio'].mean()
+            st.metric(
+                "Similarité moyenne",
+                f"{avg_similarity:.1f}%",
+                help="Score moyen de similarité fuzzy entre les transcriptions"
+            )
+
+        with col4:
+            avg_latency_saved = comp_df['latency_diff'].mean()
+            st.metric(
+                "Gain de latence moyen",
+                f"{avg_latency_saved:.2f}s",
+                help="Temps économisé avec GPT-4o-mini en moyenne",
+                delta=f"{avg_latency_saved:.2f}s"
+            )
+
+        # Second row: Additional details
+        st.caption(f"📝 Textes exactement identiques: {100 * comp_df['texts_identical'].sum() / len(comp_df):.1f}% | "
+                   f"Diff. caractères moyenne: {comp_df['char_diff'].mean():.1f}")
+
+        # # Show distributions side by side
+        # col1, col2 = st.columns(2)
+
+        # with col1:
+        #     st.markdown("### ⚡ Distribution du gain de latence")
+        #     fig_latency = px.histogram(
+        #         comp_df,
+        #         x='latency_diff',
+        #         nbins=30,
+        #         labels={'latency_diff': 'Gain de latence (s)', 'count': 'Nombre'},
+        #     )
+        #     fig_latency.add_vline(
+        #         x=comp_df['latency_diff'].mean(),
+        #         line_dash="dash",
+        #         line_color="red",
+        #         annotation_text=f"Moy: {comp_df['latency_diff'].mean():.2f}s"
+        #     )
+        #     fig_latency.update_layout(margin=dict(l=0, r=0, t=20, b=0))
+        #     st.plotly_chart(fig_latency, use_container_width=True)
+
+        # with col2:
+        #     st.markdown("### 🎯 Distribution de la similarité")
+        #     fig_similarity = px.histogram(
+        #         comp_df,
+        #         x=comp_df['similarity_ratio'] * 100,  # Convert to percentage
+        #         nbins=30,
+        #         labels={'x': 'Similarité (%)', 'count': 'Nombre'},
+        #     )
+        #     fig_similarity.add_vline(
+        #         x=95,
+        #         line_dash="dash",
+        #         line_color="green",
+        #         annotation_text="Seuil: 95%"
+        #     )
+        #     fig_similarity.add_vline(
+        #         x=comp_df['similarity_ratio'].mean() * 100,
+        #         line_dash="dash",
+        #         line_color="red",
+        #         annotation_text=f"Moy: {comp_df['similarity_ratio'].mean()*100:.1f}%"
+        #     )
+        #     fig_similarity.update_layout(margin=dict(l=0, r=0, t=20, b=0))
+        #     st.plotly_chart(fig_similarity, use_container_width=True)
+
+        # Sample comparisons
+        st.markdown("### 🔍 Exemples de comparaisons (échantillon aléatoire)")
+
+        # Select random sample (max 20)
+        sample_size = min(20, len(comp_df))
+        sample_df = comp_df.sample(n=sample_size, random_state=42)
+
+        for idx, row in sample_df.iterrows():
+            full_req_id = str(row['request_id'])
+            similarity_pct = row['similarity_ratio'] * 100
+            if row['texts_identical']:
+                similarity_badge = "✅ IDENTIQUE (100%)"
+            elif similarity_pct >= 95:
+                similarity_badge = f"🟢 TRÈS SIMILAIRE ({similarity_pct:.1f}%)"
+            elif similarity_pct >= 90:
+                similarity_badge = f"🟡 SIMILAIRE ({similarity_pct:.1f}%)"
+            else:
+                similarity_badge = f"🔴 DIFFÉRENT ({similarity_pct:.1f}%)"
+
+            latency_info = f"⚡ mini: {row['mini_duration']:.2f}s | 4o: {row['gpt4o_duration']:.2f}s (gain: {row['latency_diff']:.2f}s)"
+
+            with st.expander(
+                f"{similarity_badge} | Request {full_req_id[:8]}... | {latency_info}"
+            ):
+                # Display Request ID with "Charger" button
+                col_id, col_btn = st.columns([3, 1])
+                with col_id:
+                    st.caption(f"**Request ID:** `{full_req_id}`")
+                with col_btn:
+                    if st.button("🔊 Charger", key=f"load_audio_sample_{idx}"):
+                        st.session_state.loaded_request_id = full_req_id
+                        st.rerun()
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown(f"**🏆 GPT-4o** ({row['gpt4o_duration']:.2f}s)")
+                    st.text_area(
+                        "Transcription",
+                        value=row['gpt4o_text'],
+                        height=200,
+                        key=f"gpt4o_{idx}",
+                        disabled=True
+                    )
+                    st.caption(f"Longueur: {len(row['gpt4o_text'])} caractères")
+
+                with col2:
+                    st.markdown(f"**⚡ GPT-4o-mini** ({row['mini_duration']:.2f}s)")
+                    st.text_area(
+                        "Transcription",
+                        value=row['mini_text'],
+                        height=200,
+                        key=f"mini_{idx}",
+                        disabled=True
+                    )
+                    st.caption(f"Longueur: {len(row['mini_text'])} caractères")
+
+                # Show similarity info
+                st.markdown("**Analyse:**")
+                st.caption(f"• Similarité fuzzy: {similarity_pct:.1f}%")
+                st.caption(f"• Différence de caractères: {row['char_diff']}")
+                st.caption(f"• Gain de latence: {row['latency_diff']:.2f}s")
+
+        # # Decision helper
+        # st.markdown("### 🎯 Aide à la décision")
+
+        # # Calculate recommendation scores
+        # identical_pct = 100 * comp_df['texts_identical'].sum() / len(comp_df)
+        # avg_similarity = 100 * comp_df['similarity_ratio'].mean()
+        # speed_gain = avg_latency_saved
+        # speedup_pct = 100 * speed_gain / comp_df['gpt4o_duration'].mean()
+
+        # if highly_similar_pct >= 80 and speed_gain >= 0.15:
+        #     st.success(
+        #         f"✅ **Recommandation: PASSER À GPT-4o-mini**\n\n"
+        #         f"• {highly_similar_pct:.1f}% des textes sont très similaires (>95% similarité)\n"
+        #         f"• Similarité moyenne: {avg_similarity:.1f}%\n"
+        #         f"• Gain de latence moyen: {speed_gain:.2f}s ({speedup_pct:.0f}% plus rapide)\n"
+        #         f"• Les différences sont majoritairement cosmétiques (ponctuation, formatage)\n\n"
+        #         f"**Impact utilisateur**: Expérience {speedup_pct:.0f}% plus rapide avec qualité quasi-identique"
+        #     )
+        # elif avg_similarity >= 90 and speed_gain >= 0.10:
+        #     st.info(
+        #         f"🤔 **Recommandation: TEST EN PRODUCTION RECOMMANDÉ**\n\n"
+        #         f"• Similarité moyenne: {avg_similarity:.1f}%\n"
+        #         f"• {highly_similar_pct:.1f}% des textes >95% similaires\n"
+        #         f"• Gain de latence moyen: {speed_gain:.2f}s ({speedup_pct:.0f}%)\n"
+        #         f"• Différences mineures à valider avec utilisateurs\n\n"
+        #         f"**Suggestion**: Déployer GPT-4o-mini pour 50% du trafic et collecter feedback"
+        #     )
+        # elif avg_similarity >= 85:
+        #     st.warning(
+        #         f"⚠️ **Recommandation: EXAMINER LES DIFFÉRENCES**\n\n"
+        #         f"• Similarité moyenne: {avg_similarity:.1f}%\n"
+        #         f"• Seulement {highly_similar_pct:.1f}% des textes >95% similaires\n"
+        #         f"• Gain de latence: {speed_gain:.2f}s ({speedup_pct:.0f}%)\n\n"
+        #         f"**Suggestion**: Examiner manuellement les exemples ci-dessus pour évaluer l'impact qualité"
+        #     )
+        # else:
+        #     st.error(
+        #         f"❌ **Recommandation: RESTER SUR GPT-4o OU TESTER DEEPGRAM**\n\n"
+        #         f"• Similarité moyenne: {avg_similarity:.1f}% (insuffisante)\n"
+        #         f"• Gain de latence: {speed_gain:.2f}s ({speedup_pct:.0f}%)\n\n"
+        #         f"**Alternative**: Si la vitesse est prioritaire, considérer Deepgram Nova-2 pour un gain plus significatif"
+        #     )
+
+        # # Show detailed breakdown
+        # st.caption(f"📊 Détails: {identical_pct:.1f}% identiques caractère par caractère | "
+        #            f"Médiane similarité: {100*comp_df['similarity_ratio'].median():.1f}% | "
+        #            f"P10 similarité: {100*comp_df['similarity_ratio'].quantile(0.1):.1f}%")
+
+        # Additional insights
+        with st.expander("📈 Statistiques détaillées"):
+            st.markdown(f"""
+            **Distribution des latences:**
+            - GPT-4o: min={comp_df['gpt4o_duration'].min():.2f}s, max={comp_df['gpt4o_duration'].max():.2f}s, médiane={comp_df['gpt4o_duration'].median():.2f}s
+            - GPT-4o-mini: min={comp_df['mini_duration'].min():.2f}s, max={comp_df['mini_duration'].max():.2f}s, médiane={comp_df['mini_duration'].median():.2f}s
+
+            **Distribution de similarité:**
+            - Moyenne: {100*comp_df['similarity_ratio'].mean():.1f}%
+            - Médiane: {100*comp_df['similarity_ratio'].median():.1f}%
+            - P10 (10% pires cas): {100*comp_df['similarity_ratio'].quantile(0.1):.1f}%
+            - P90: {100*comp_df['similarity_ratio'].quantile(0.9):.1f}%
+            - Textes >95% similaires: {100*comp_df['highly_similar'].sum()/len(comp_df):.1f}%
+            - Textes >90% similaires: {100*(comp_df['similarity_ratio']>=0.9).sum()/len(comp_df):.1f}%
+            - Textes exactement identiques: {100*comp_df['texts_identical'].sum()/len(comp_df):.1f}%
+
+            **Distribution des gains:**
+            - Gain de latence: P50={comp_df['latency_diff'].quantile(0.5):.2f}s, P90={comp_df['latency_diff'].quantile(0.9):.2f}s, P95={comp_df['latency_diff'].quantile(0.95):.2f}s
+            - Différence de caractères: P50={comp_df['char_diff'].quantile(0.5):.0f}, P90={comp_df['char_diff'].quantile(0.9):.0f}, P95={comp_df['char_diff'].quantile(0.95):.0f}
+
+            **Impact sur {len(comp_df)} requêtes:**
+            - Temps total économisé avec mini: {comp_df['latency_diff'].sum():.1f}s ({comp_df['latency_diff'].sum()/60:.1f} minutes)
+            - Amélioration moyenne: {100*avg_latency_saved/comp_df['gpt4o_duration'].mean():.1f}%
+            """)
+
+    else:
+        st.info("Aucune requête où GPT-4o et GPT-4o-mini ont tous deux répondu.")
+else:
+    st.info("Aucune donnée disponible pour la comparaison de qualité.")
