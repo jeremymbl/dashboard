@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Racing Strategy Analysis Script
-Outputs pure numerical data about transcription racing strategy effectiveness.
+Outputs numerical data and visualizations about transcription racing strategy effectiveness.
 """
 
 import sys
@@ -11,12 +11,235 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import pandas as pd
 import numpy as np
 from difflib import SequenceMatcher
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import seaborn as sns
 from src.data_sources import get_supabase
+
+# Set style for better-looking plots
+sns.set_style("whitegrid")
+plt.rcParams['figure.figsize'] = (12, 8)
+plt.rcParams['font.size'] = 10
 
 
 def calculate_similarity(text1: str, text2: str) -> float:
     """Calculate fuzzy similarity between two texts."""
     return SequenceMatcher(None, text1, text2).ratio()
+
+
+def create_plots(race_df, jobs_df, gpt4o_mini_comp_df, output_dir):
+    """Create all visualization plots."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n📊 Generating plots in {output_dir}/...")
+
+    # 1. Racing Strategy ROI Plot
+    strategy_used = race_df[race_df['strategy_used']]
+    if not strategy_used.empty:
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        # Color code by similarity
+        colors = []
+        for sim in strategy_used['similarity']:
+            if sim >= 0.95:
+                colors.append('green')
+            elif sim >= 0.90:
+                colors.append('orange')
+            else:
+                colors.append('red')
+
+        scatter = ax.scatter(
+            strategy_used['time_wasted'],
+            strategy_used['similarity'] * 100,
+            c=colors,
+            alpha=0.6,
+            s=100,
+            edgecolors='black',
+            linewidth=0.5
+        )
+
+        ax.axhline(y=95, color='green', linestyle='--', linewidth=2, alpha=0.5, label='95% similarity')
+        ax.axhline(y=90, color='orange', linestyle='--', linewidth=2, alpha=0.5, label='90% similarity')
+        ax.set_xlabel('Time Wasted (seconds)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Text Similarity (%)', fontsize=12, fontweight='bold')
+        ax.set_title('Racing Strategy ROI: Is Waiting for Slower Models Worth It?',
+                     fontsize=14, fontweight='bold', pad=20)
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+
+        # Add statistics box
+        textstr = f'Cases: {len(strategy_used)}\nMedian wait: {strategy_used["time_wasted"].median():.2f}s\nAvg similarity: {strategy_used["similarity"].mean()*100:.1f}%'
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+        ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=10,
+                verticalalignment='top', bbox=props)
+
+        plt.tight_layout()
+        plt.savefig(output_dir / '1_racing_strategy_roi.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ 1_racing_strategy_roi.png")
+
+    # 2. Model Performance Matrix
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    model_stats = []
+    for model in jobs_df['model'].unique():
+        model_jobs = jobs_df[jobs_df['model'] == model]
+        success = model_jobs[model_jobs['status'] == 'success']
+        if not success.empty:
+            model_stats.append({
+                'model': model.replace('openai:', '').replace(':gpt-', ':GPT-'),
+                'avg_duration': success['duration'].mean(),
+                'success_rate': len(success) / len(model_jobs),
+                'count': len(model_jobs)
+            })
+
+    if model_stats:
+        ms_df = pd.DataFrame(model_stats)
+        scatter = ax.scatter(
+            ms_df['avg_duration'],
+            ms_df['success_rate'] * 100,
+            s=ms_df['count'] * 5,
+            alpha=0.6,
+            c=range(len(ms_df)),
+            cmap='viridis',
+            edgecolors='black',
+            linewidth=2
+        )
+
+        for idx, row in ms_df.iterrows():
+            ax.annotate(
+                row['model'].split(':')[-1],
+                (row['avg_duration'], row['success_rate'] * 100),
+                xytext=(5, 5),
+                textcoords='offset points',
+                fontsize=9,
+                fontweight='bold'
+            )
+
+        ax.set_xlabel('Average Duration (seconds)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Success Rate (%)', fontsize=12, fontweight='bold')
+        ax.set_title('Model Performance: Speed vs Reliability\n(Bubble size = number of jobs)',
+                     fontsize=14, fontweight='bold', pad=20)
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim(0, 105)
+
+        plt.tight_layout()
+        plt.savefig(output_dir / '2_model_performance.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ 2_model_performance.png")
+
+    # 3. Fastest vs Winner Heatmap
+    crosstab = pd.crosstab(race_df['fastest_model'], race_df['winner_model'])
+
+    fig, ax = plt.subplots(figsize=(12, 10))
+    sns.heatmap(crosstab, annot=True, fmt='d', cmap='YlOrRd', ax=ax,
+                cbar_kws={'label': 'Count'}, linewidths=0.5)
+    ax.set_xlabel('Winner Model', fontsize=12, fontweight='bold')
+    ax.set_ylabel('Fastest Model', fontsize=12, fontweight='bold')
+    ax.set_title('Fastest vs Winner: Which Models Win the Race?\n(Diagonal = fastest model won)',
+                 fontsize=14, fontweight='bold', pad=20)
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+    plt.savefig(output_dir / '3_fastest_vs_winner_heatmap.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  ✓ 3_fastest_vs_winner_heatmap.png")
+
+    # 4. GPT-4o vs Mini Decision Plot
+    if gpt4o_mini_comp_df is not None and not gpt4o_mini_comp_df.empty:
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        # Color by recommendation zones
+        colors = []
+        for _, row in gpt4o_mini_comp_df.iterrows():
+            if row['similarity'] >= 0.95 and row['latency_diff'] >= 0.15:
+                colors.append('green')  # Switch to mini
+            elif row['similarity'] >= 0.90 and row['latency_diff'] >= 0.10:
+                colors.append('yellow')  # Test recommended
+            elif row['similarity'] >= 0.85:
+                colors.append('orange')  # Examine differences
+            else:
+                colors.append('red')  # Stay on 4o
+
+        scatter = ax.scatter(
+            gpt4o_mini_comp_df['latency_diff'],
+            gpt4o_mini_comp_df['similarity'] * 100,
+            c=colors,
+            alpha=0.6,
+            s=100,
+            edgecolors='black',
+            linewidth=0.5
+        )
+
+        # Add recommendation zones
+        ax.axhline(y=95, color='green', linestyle='--', alpha=0.5, linewidth=2)
+        ax.axhline(y=90, color='yellow', linestyle='--', alpha=0.5, linewidth=2)
+        ax.axhline(y=85, color='orange', linestyle='--', alpha=0.5, linewidth=2)
+        ax.axvline(x=0.15, color='gray', linestyle='--', alpha=0.3)
+
+        ax.set_xlabel('Latency Savings with GPT-4o-mini (seconds)', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Text Similarity (%)', fontsize=12, fontweight='bold')
+        ax.set_title('GPT-4o vs GPT-4o-mini: Decision Matrix\n(Green=Switch to mini, Yellow=Test, Red=Keep 4o)',
+                     fontsize=14, fontweight='bold', pad=20)
+        ax.grid(True, alpha=0.3)
+
+        # Add statistics
+        textstr = (f'Samples: {len(gpt4o_mini_comp_df)}\n'
+                   f'Avg savings: {gpt4o_mini_comp_df["latency_diff"].mean():.2f}s\n'
+                   f'Avg similarity: {gpt4o_mini_comp_df["similarity"].mean()*100:.1f}%\n'
+                   f'Highly similar (>95%): {(gpt4o_mini_comp_df["similarity"]>=0.95).sum()}/{len(gpt4o_mini_comp_df)}')
+        props = dict(boxstyle='round', facecolor='lightblue', alpha=0.8)
+        ax.text(0.02, 0.02, textstr, transform=ax.transAxes, fontsize=10,
+                verticalalignment='bottom', bbox=props)
+
+        plt.tight_layout()
+        plt.savefig(output_dir / '4_gpt4o_vs_mini_decision.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ 4_gpt4o_vs_mini_decision.png")
+
+    # 5. Time Wasted Distribution
+    if not strategy_used.empty:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+        # Box plot
+        ax1.boxplot([strategy_used['time_wasted']], vert=True, patch_artist=True,
+                    boxprops=dict(facecolor='lightblue', alpha=0.7),
+                    medianprops=dict(color='red', linewidth=2))
+        ax1.set_ylabel('Time Wasted (seconds)', fontsize=12, fontweight='bold')
+        ax1.set_title('Time Wasted When Racing Strategy is Used', fontsize=12, fontweight='bold')
+        ax1.set_xticklabels(['All Cases'])
+        ax1.grid(True, alpha=0.3, axis='y')
+
+        # Add percentile annotations
+        p50 = strategy_used['time_wasted'].quantile(0.50)
+        p90 = strategy_used['time_wasted'].quantile(0.90)
+        p95 = strategy_used['time_wasted'].quantile(0.95)
+        textstr = f'P50: {p50:.2f}s\nP90: {p90:.2f}s\nP95: {p95:.2f}s'
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+        ax1.text(0.6, 0.95, textstr, transform=ax1.transAxes, fontsize=10,
+                verticalalignment='top', bbox=props)
+
+        # Histogram
+        ax2.hist(strategy_used['time_wasted'], bins=30, color='skyblue',
+                edgecolor='black', alpha=0.7)
+        ax2.axvline(strategy_used['time_wasted'].median(), color='red',
+                   linestyle='--', linewidth=2, label=f'Median: {strategy_used["time_wasted"].median():.2f}s')
+        ax2.axvline(strategy_used['time_wasted'].mean(), color='green',
+                   linestyle='--', linewidth=2, label=f'Mean: {strategy_used["time_wasted"].mean():.2f}s')
+        ax2.set_xlabel('Time Wasted (seconds)', fontsize=12, fontweight='bold')
+        ax2.set_ylabel('Count', fontsize=12, fontweight='bold')
+        ax2.set_title('Distribution of Time Wasted', fontsize=12, fontweight='bold')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3, axis='y')
+
+        plt.tight_layout()
+        plt.savefig(output_dir / '5_time_wasted_distribution.png', dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  ✓ 5_time_wasted_distribution.png")
+
+    print(f"\n✅ All plots saved to {output_dir}/")
 
 
 def fetch_all_rows(sb, schema: str, table_name: str, select: str = "*"):
@@ -244,6 +467,11 @@ def main():
         )
 
     print("\n" + "=" * 80)
+
+    # === GENERATE PLOTS ===
+    comp_df_for_plot = pd.DataFrame(gpt4o_mini_comparison) if gpt4o_mini_comparison else None
+    output_dir = Path("/tmp/racing_analysis_plots")
+    create_plots(race_df, jobs_df, comp_df_for_plot, output_dir)
 
 
 if __name__ == "__main__":

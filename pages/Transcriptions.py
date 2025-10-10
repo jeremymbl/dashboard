@@ -95,11 +95,14 @@ if df.empty:
     st.stop()
 
 # —— détection colonnes timestamps APRES merge ——
-REQ_TS = _find(["requested_at", "created_at", "inserted_at"], df)
+# Note: After merge, requested_at becomes requested_at_x (from jobs) and requested_at_y (from requests)
+# We want to use requested_at_x (from jobs) to match the behavior of racing analysis
+REQ_TS = _find(["requested_at_x", "requested_at", "created_at", "inserted_at"], df)
 RES_TS = _find(["responded_at", "completed_at"], df)
 if (REQ_TS is None) or (RES_TS is None):
     st.warning("Impossible de localiser les colonnes timestamp dans les données fusionnées.")
     st.stop()
+
 
 # —— Engine ——
 engine_col = _find(["model", "engine"], df) or "model"
@@ -113,6 +116,7 @@ for _c in (REQ_TS, RES_TS):
 
 with pd.option_context("mode.use_inf_as_na", True):
     df["latency_s"] = (df[RES_TS] - df[REQ_TS]).dt.total_seconds()
+
 
 # —— Succès ——
 status_col = _find(["status", "success", "state"], df)
@@ -255,13 +259,15 @@ agg = (
 # fig_calls.update_layout(margin=dict(l=0, r=0, t=40, b=0))
 # st.plotly_chart(fig_calls, use_container_width=True)
 
-# st.subheader("Distribution des latences")
-# fig_lat = px.box(
-#     sub, x="engine", y="latency_s",
-#     labels={"engine": "Moteur", "latency_s": "Latence (s)"},
-# )
-# fig_lat.update_layout(margin=dict(l=0, r=0, t=40, b=0))
-# st.plotly_chart(fig_lat, use_container_width=True)
+st.subheader("Distribution des latences")
+
+
+fig_lat = px.box(
+    sub, x="engine", y="latency_s",
+    labels={"engine": "Moteur", "latency_s": "Latence (s)"},
+)
+fig_lat.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+st.plotly_chart(fig_lat, use_container_width=True)
 
 # ------------------------------------------------------------------
 # 5. Detailed comparison table: all models per prompt
@@ -348,6 +354,7 @@ def load_detailed_comparison(schema: str = "auditoo") -> pd.DataFrame:
     comparison_df['requested_at'] = pd.to_datetime(comparison_df['requested_at'], errors='coerce')
     comparison_df['responded_at'] = pd.to_datetime(comparison_df['responded_at'], errors='coerce')
 
+
     return comparison_df
 
 detailed_df = load_detailed_comparison()
@@ -365,6 +372,11 @@ if not detailed_df.empty:
         detail_mask &= detailed_df['model'].str.lower() == eng_sel
 
     detail_sub = detailed_df[detail_mask].copy()
+
+    # NOTE: We keep ALL jobs here (winners and non-winners) because:
+    # - Racing analysis needs all jobs per request to compare fastest vs winner
+    # - GPT-4o comparison needs both models for each request
+    # We'll filter to winners only in the final stats display section
 
     if not detail_sub.empty:
         # Build storage_paths from detail_sub
@@ -764,6 +776,10 @@ if not detailed_df.empty and not detail_sub.empty:
 
     for req_id, group in detail_sub.groupby('transcription_request_id'):
         # Look for both models in this request
+        # NOTE: We compare ALL attempts (winners and non-winners) because:
+        # - Each request typically has only ONE winner
+        # - We want to compare how both models perform on the SAME audio
+        # - This shows the quality comparison across all transcriptions, not just production
         gpt4o = group[group['model'] == 'openai:gpt-4o-transcribe']
         gpt4o_mini = group[group['model'] == 'openai:gpt-4o-mini-transcribe']
 
@@ -996,7 +1012,10 @@ if not detailed_df.empty and not detail_sub.empty:
         # Additional insights
         with st.expander("📈 Statistiques détaillées"):
             st.markdown(f"""
-            **Distribution des latences:**
+            **⚠️ Note:** Ces statistiques incluent TOUTES les tentatives (gagnantes et non-gagnantes) car nous comparons les performances des deux modèles sur les MÊMES audios.
+            Cela diffère du box plot en haut de page qui ne montre que les transcriptions gagnantes (production).
+
+            **Distribution des latences (toutes tentatives):**
             - GPT-4o: min={comp_df['gpt4o_duration'].min():.2f}s, max={comp_df['gpt4o_duration'].max():.2f}s, médiane={comp_df['gpt4o_duration'].median():.2f}s
             - GPT-4o-mini: min={comp_df['mini_duration'].min():.2f}s, max={comp_df['mini_duration'].max():.2f}s, médiane={comp_df['mini_duration'].median():.2f}s
 
