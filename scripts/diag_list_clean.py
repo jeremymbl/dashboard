@@ -76,51 +76,97 @@ def clean_registry(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     if DATE_DEBUT_COL and DATE_FIN_COL:
-        # Traitement des dates pour les certificats DPE
-        dpe_dates = (
-            df[df["Type de certificat"].str.contains("DPE", case=False, na=False)][
-                ["email", DATE_DEBUT_COL, DATE_FIN_COL]
-            ]
-            .dropna(subset=["email"])
-            .assign(
-                **{
-                    DATE_DEBUT_COL: lambda x: pd.to_datetime(x[DATE_DEBUT_COL], errors="coerce", dayfirst=True),
-                    DATE_FIN_COL: lambda x: pd.to_datetime(x[DATE_FIN_COL], errors="coerce", dayfirst=True),
-                }
+        # Helper function to extract dates for a certificate type
+        def extract_cert_dates(cert_filter, prefix, dayfirst=True):
+            """Extract start/end dates for a specific certificate type."""
+            return (
+                df[cert_filter][["email", DATE_DEBUT_COL, DATE_FIN_COL]]
+                .dropna(subset=["email"])
+                .assign(
+                    **{
+                        DATE_DEBUT_COL: lambda x: pd.to_datetime(x[DATE_DEBUT_COL], errors="coerce", dayfirst=dayfirst),
+                        DATE_FIN_COL: lambda x: pd.to_datetime(x[DATE_FIN_COL], errors="coerce", dayfirst=dayfirst),
+                    }
+                )
+                .dropna(subset=[DATE_DEBUT_COL, DATE_FIN_COL])
+                .sort_values(["email", DATE_FIN_COL], ascending=[True, False])
+                .groupby("email", as_index=False)
+                .first()
+                .rename(columns={DATE_DEBUT_COL: f"{prefix}_debut", DATE_FIN_COL: f"{prefix}_fin"})
             )
-            .sort_values(["email", DATE_FIN_COL], ascending=[True, False])
-            .groupby("email", as_index=False)
-            .first()
-            .rename(columns={DATE_DEBUT_COL: "DPE_debut", DATE_FIN_COL: "DPE_fin"})
+
+        # Traitement des dates pour les certificats DPE (Performance énergétique)
+        dpe_dates = extract_cert_dates(
+            df["Type de certificat"].str.contains("Performance énergétique|DPE", case=False, na=False),
+            "DPE"
         )
-        
+
         # Traitement des dates pour les certificats Audit énergétique
-        audit_dates = (
-            df[df["Type de certificat"].str.contains("Audit énergétique", case=False, na=False)][
-                ["email", DATE_DEBUT_COL, DATE_FIN_COL]
-            ]
-            .dropna(subset=["email"])
-            .assign(
-                **{
-                    DATE_DEBUT_COL: lambda x: pd.to_datetime(x[DATE_DEBUT_COL], errors="coerce", dayfirst=False),
-                    DATE_FIN_COL: lambda x: pd.to_datetime(x[DATE_FIN_COL], errors="coerce", dayfirst=False),
-                }
-            )
-            # Filtrer les lignes où les deux dates sont valides
-            .dropna(subset=[DATE_DEBUT_COL, DATE_FIN_COL])
-            .sort_values(["email", DATE_FIN_COL], ascending=[True, False])
-            .groupby("email", as_index=False)
-            .first()
-            .rename(columns={DATE_DEBUT_COL: "Audit_debut", DATE_FIN_COL: "Audit_fin"})
+        audit_dates = extract_cert_dates(
+            df["Type de certificat"].str.contains("Audit énergétique", case=False, na=False),
+            "Audit",
+            dayfirst=False
+        )
+
+        # Traitement des dates pour les certificats Amiante (both types)
+        amiante_dates = extract_cert_dates(
+            df["Type de certificat"].str.contains("Amiante", case=False, na=False),
+            "Amiante"
+        )
+
+        # Traitement des dates pour les certificats Plomb
+        plomb_dates = extract_cert_dates(
+            df["Type de certificat"].str.contains("Plomb", case=False, na=False),
+            "Plomb"
+        )
+
+        # Traitement des dates pour les certificats Electricité
+        electricite_dates = extract_cert_dates(
+            df["Type de certificat"].str.contains("Electricité", case=False, na=False),
+            "Electricite"
+        )
+
+        # Traitement des dates pour les certificats Gaz
+        gaz_dates = extract_cert_dates(
+            df["Type de certificat"].str.contains("Gaz", case=False, na=False),
+            "Gaz"
+        )
+
+        # Traitement des dates pour les certificats Termites (both types)
+        termites_dates = extract_cert_dates(
+            df["Type de certificat"].str.contains("Termites", case=False, na=False),
+            "Termites"
+        )
+
+        # Traitement des dates pour les certificats DRIPP/CAT
+        dripp_dates = extract_cert_dates(
+            df["Type de certificat"].str.contains("DRIPP|CAT", case=False, na=False),
+            "DRIPP"
         )
     else:
         dpe_dates = pd.DataFrame(columns=["email", "DPE_debut", "DPE_fin"])
         audit_dates = pd.DataFrame(columns=["email", "Audit_debut", "Audit_fin"])
+        amiante_dates = pd.DataFrame(columns=["email", "Amiante_debut", "Amiante_fin"])
+        plomb_dates = pd.DataFrame(columns=["email", "Plomb_debut", "Plomb_fin"])
+        electricite_dates = pd.DataFrame(columns=["email", "Electricite_debut", "Electricite_fin"])
+        gaz_dates = pd.DataFrame(columns=["email", "Gaz_debut", "Gaz_fin"])
+        termites_dates = pd.DataFrame(columns=["email", "Termites_debut", "Termites_fin"])
+        dripp_dates = pd.DataFrame(columns=["email", "DRIPP_debut", "DRIPP_fin"])
 
-    # Fusion finale
-    result = people.merge(cert_list, on="email", how="left").merge(dpe_dates, on="email", how="left")
-    result = result.merge(audit_dates, on="email", how="left")
-    
+    # Fusion finale - merge all certification dates
+    result = (
+        people
+        .merge(cert_list, on="email", how="left")
+        .merge(dpe_dates, on="email", how="left")
+        .merge(audit_dates, on="email", how="left")
+        .merge(amiante_dates, on="email", how="left")
+        .merge(plomb_dates, on="email", how="left")
+        .merge(electricite_dates, on="email", how="left")
+        .merge(gaz_dates, on="email", how="left")
+        .merge(termites_dates, on="email", how="left")
+        .merge(dripp_dates, on="email", how="left")
+    )
+
     return result
 
 

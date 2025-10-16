@@ -11,70 +11,101 @@ from scripts.diag_list import DiagListRessource
 from scripts.diag_list_clean import clean_registry
 
 
-def analyze_certificates_from_df(df: pd.DataFrame, csv_date: datetime = None) -> Dict[str, int]:
+def analyze_certificates_from_df(df: pd.DataFrame, csv_date: datetime = None) -> Dict:
     """
-    Analyze a cleaned diagnosticians DataFrame to count certificate types.
+    Analyze a cleaned diagnosticians DataFrame to count all certificate types.
     Only counts certificates that are valid at the CSV publication date.
-    
+
     Args:
-        df: Cleaned DataFrame with columns 'DPE_debut', 'DPE_fin', 'Audit_debut', 'Audit_fin'
+        df: Cleaned DataFrame with columns for all certification types (*_debut, *_fin)
         csv_date: Date of CSV publication to check certificate validity against
-        
+
     Returns:
-        Dictionary with counts: {'DPE': count, 'Audit': count}
+        Dictionary with counts and percentages: {
+            'counts': {'DPE': count, 'Audit': count, 'Amiante': count, 'Plomb': count, 'Autres': count},
+            'total': total_certifications,
+            'percentages': {'DPE': %, 'Audit': %, 'Amiante': %, 'Plomb': %, 'Autres': %}
+        }
     """
-    # If no csv_date provided, count all certificates (backward compatibility)
-    if csv_date is None:
-        # Count DPE certificates (those with both DPE_debut and DPE_fin filled)
-        dpe_count = df[
-            df['DPE_debut'].notna() & 
-            df['DPE_fin'].notna()
-        ].shape[0]
-        
-        # Count Audit certificates (those with both Audit_debut and Audit_fin filled)
-        audit_count = df[
-            df['Audit_debut'].notna() & 
-            df['Audit_fin'].notna()
-        ].shape[0]
-    else:
-        # Convert csv_date to date if it's a datetime object
-        if hasattr(csv_date, 'date'):
-            csv_date = csv_date.date()
-        
-        # Count DPE certificates that are valid at csv_date
-        dpe_mask = (
-            df['DPE_debut'].notna() & 
-            df['DPE_fin'].notna() &
-            (df['DPE_fin'].dt.date >= csv_date)
-        )
-        dpe_count = df[dpe_mask].shape[0]
-        
-        # Count Audit certificates that are valid at csv_date
-        audit_mask = (
-            df['Audit_debut'].notna() & 
-            df['Audit_fin'].notna() &
-            (df['Audit_fin'].dt.date >= csv_date)
-        )
-        audit_count = df[audit_mask].shape[0]
-    
-    return {
+    # Helper function to count valid certificates
+    def count_valid_certs(prefix: str) -> int:
+        debut_col = f'{prefix}_debut'
+        fin_col = f'{prefix}_fin'
+
+        if debut_col not in df.columns or fin_col not in df.columns:
+            return 0
+
+        if csv_date is None:
+            # Count all certificates
+            return df[df[debut_col].notna() & df[fin_col].notna()].shape[0]
+        else:
+            # Convert csv_date to date if it's a datetime object
+            check_date = csv_date.date() if hasattr(csv_date, 'date') else csv_date
+            # Count only valid certificates at csv_date
+            mask = (
+                df[debut_col].notna() &
+                df[fin_col].notna() &
+                (df[fin_col].dt.date >= check_date)
+            )
+            return df[mask].shape[0]
+
+    # Count each certification type
+    dpe_count = count_valid_certs('DPE')
+    audit_count = count_valid_certs('Audit')
+    amiante_count = count_valid_certs('Amiante')
+    plomb_count = count_valid_certs('Plomb')
+
+    # "Autres" includes: Electricité, Gaz, Termites, DRIPP
+    electricite_count = count_valid_certs('Electricite')
+    gaz_count = count_valid_certs('Gaz')
+    termites_count = count_valid_certs('Termites')
+    dripp_count = count_valid_certs('DRIPP')
+    autres_count = electricite_count + gaz_count + termites_count + dripp_count
+
+    # Calculate totals
+    total_certifications = dpe_count + audit_count + amiante_count + plomb_count + autres_count
+
+    # Calculate percentages
+    def calc_percentage(count: int, total: int) -> float:
+        return round((count / total * 100), 2) if total > 0 else 0.0
+
+    counts = {
         'DPE': dpe_count,
-        'Audit': audit_count
+        'Audit': audit_count,
+        'Amiante': amiante_count,
+        'Plomb': plomb_count,
+        'Autres': autres_count
+    }
+
+    percentages = {
+        'DPE': calc_percentage(dpe_count, total_certifications),
+        'Audit': calc_percentage(audit_count, total_certifications),
+        'Amiante': calc_percentage(amiante_count, total_certifications),
+        'Plomb': calc_percentage(plomb_count, total_certifications),
+        'Autres': calc_percentage(autres_count, total_certifications)
+    }
+
+    return {
+        'counts': counts,
+        'total': total_certifications,
+        'percentages': percentages,
+        'total_diagnosticians': len(df)
     }
 
 
 def fetch_and_analyze_monthly_data() -> List[Dict]:
     """
     Fetch the last 12 months of diagnosticians data and analyze certificates.
-    
+
     Returns:
         List of dictionaries with monthly data:
         [
             {
                 'month': '2024-01',
                 'date': datetime_object,
-                'DPE': count,
-                'Audit': count,
+                'counts': {'DPE': X, 'Audit': Y, 'Amiante': Z, 'Plomb': W, 'Autres': V},
+                'total': total_certifications,
+                'percentages': {'DPE': X%, 'Audit': Y%, 'Amiante': Z%, 'Plomb': W%, 'Autres': V%},
                 'resource_label': 'CSV filename'
             },
             ...
@@ -82,41 +113,43 @@ def fetch_and_analyze_monthly_data() -> List[Dict]:
     """
     # Get the 12 monthly resources
     monthly_resources = DiagListRessource.fetch_last_12_months_sync()
-    
+
     # Debug: Print the resources we're working with
     print("\n===== RESOURCES FETCHED =====")
     for i, resource in enumerate(monthly_resources):
         print(f"{i+1}. {resource.label} - Date: {resource.date}")
-    
+
     results = []
-    
+
     for resource in monthly_resources:
         try:
             # Use a new event loop for each resource to avoid nested asyncio.run() calls
             import asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
+
             # Download and clean the CSV
             raw_df = loop.run_until_complete(resource.fetch_csv_dataframe())
             loop.close()
-            
+
             cleaned_df = clean_registry(raw_df)
-            
+
             # Analyze certificates with CSV date validation
-            cert_counts = analyze_certificates_from_df(cleaned_df, resource.date)
-            
+            cert_data = analyze_certificates_from_df(cleaned_df, resource.date)
+
             # Format month string
             month_str = resource.date.strftime('%Y-%m')
-            
+
             results.append({
                 'month': month_str,
                 'date': resource.date,
-                'DPE': cert_counts['DPE'],
-                'Audit': cert_counts['Audit'],
+                'counts': cert_data['counts'],
+                'total': cert_data['total'],
+                'percentages': cert_data['percentages'],
+                'total_diagnosticians': cert_data['total_diagnosticians'],
                 'resource_label': resource.label
             })
-            
+
         except Exception as e:
             print(f"Error processing {resource.label}: {e}")
             # Add empty data for this month to maintain continuity
@@ -124,8 +157,10 @@ def fetch_and_analyze_monthly_data() -> List[Dict]:
             results.append({
                 'month': month_str,
                 'date': resource.date,
-                'DPE': 0,
-                'Audit': 0,
+                'counts': {'DPE': 0, 'Audit': 0, 'Amiante': 0, 'Plomb': 0, 'Autres': 0},
+                'total': 0,
+                'percentages': {'DPE': 0, 'Audit': 0, 'Amiante': 0, 'Plomb': 0, 'Autres': 0},
+                'total_diagnosticians': 0,
                 'resource_label': resource.label,
                 'error': str(e)
             })
@@ -170,56 +205,65 @@ def fetch_and_analyze_monthly_data() -> List[Dict]:
 
 def prepare_chart_data(monthly_data: List[Dict]) -> pd.DataFrame:
     """
-    Prepare data for Plotly chart display.
-    
+    Prepare data for Plotly chart display with percentages.
+
     Args:
-        monthly_data: List of monthly analysis results
-        
+        monthly_data: List of monthly analysis results with counts and percentages
+
     Returns:
-        DataFrame ready for plotting with columns: month, certificate_type, count
+        DataFrame ready for plotting with columns: month, certificate_type, percentage, count, total
     """
     # Debug: Print the input data
     print("\n===== INPUT DATA FOR CHART =====")
     for i, data in enumerate(monthly_data):
         print(f"{i+1}. {data['month']} - {data['resource_label']}")
-    
+
     chart_data = []
-    
+
     # Reverse to show oldest to newest (left to right on chart)
     reversed_data = list(reversed(monthly_data))
-    
+
     # Debug: Print the reversed data
     print("\n===== REVERSED DATA FOR CHART (OLDEST TO NEWEST) =====")
     for i, data in enumerate(reversed_data):
         print(f"{i+1}. {data['month']} - {data['resource_label']}")
-    
+
     # Créer les labels de mois en français
     month_names = {
         1: "Jan", 2: "Fév", 3: "Mar", 4: "Avr", 5: "Mai", 6: "Juin",
         7: "Juil", 8: "Août", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Déc"
     }
-    
+
+    # Certificate types in display order
+    cert_types = ['DPE', 'Audit', 'Amiante', 'Plomb', 'Autres']
+    cert_labels = {
+        'DPE': 'DPE',
+        'Audit': 'Audit énergétique',
+        'Amiante': 'Amiante',
+        'Plomb': 'Plomb',
+        'Autres': 'Autres (Élec, Gaz, Termites, etc.)'
+    }
+
     for data in reversed_data:
         # Convertir YYYY-MM en label français
         year, month = data['month'].split('-')
         month_label = f"{month_names[int(month)]} {year}"
-        
-        chart_data.append({
-            'month': month_label,
-            'certificate_type': 'DPE',
-            'count': data['DPE']
-        })
-        chart_data.append({
-            'month': month_label, 
-            'certificate_type': 'Audit énergétique',
-            'count': data['Audit']
-        })
-    
+
+        # Add data for each certificate type
+        for cert_type in cert_types:
+            chart_data.append({
+                'month': month_label,
+                'certificate_type': cert_labels[cert_type],
+                'percentage': data['percentages'].get(cert_type, 0),
+                'count': data['counts'].get(cert_type, 0),
+                'total': data['total']
+            })
+
     # Create DataFrame
     df = pd.DataFrame(chart_data)
-    
+
     # Debug: Print the final DataFrame
     print("\n===== FINAL CHART DATA =====")
-    print(df)
-    
+    print(df.head(20))
+
     return df

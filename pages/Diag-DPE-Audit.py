@@ -54,146 +54,181 @@ st.info(f"Thème sélectionné: {theme_names[st.session_state.selected_theme]}")
 
 def apply_theme_styling(fig, theme, chart_df):
     """Applique le style selon le thème sélectionné"""
-    
+
     if theme == "corporate":
         # Thème Corporate - Professionnel pour LinkedIn
         fig.update_layout(
             title={
-                'text': "Évolution du nombre de diagnostiqueurs certifiés en France<br><sub>Données officielles - Ministère de la Transition Écologique</sub>",
+                'text': "Répartition des certifications de diagnostiqueurs en France<br><sub>Données officielles - Ministère de la Transition Écologique | Une personne peut détenir plusieurs certifications</sub>",
                 'x': 0.5, 'xanchor': 'center',
-                'font': {'size': 24, 'family': 'Arial, sans-serif', 'color': '#2c3e50'}
+                'font': {'size': 22, 'family': 'Arial, sans-serif', 'color': '#2c3e50'}
             },
             plot_bgcolor='white', paper_bgcolor='white',
             xaxis={
-                'title_font': {'size': 16, 'color': '#34495e'}, 
+                'title_font': {'size': 16, 'color': '#34495e'},
                 'tickfont': {'size': 14, 'color': '#34495e'},
                 'showgrid': True, 'gridcolor': '#ecf0f1'
             },
             yaxis={
-                'title_font': {'size': 16, 'color': '#34495e'}, 
+                'title_font': {'size': 16, 'color': '#34495e'},
                 'tickfont': {'size': 14, 'color': '#34495e'},
-                'showgrid': True, 'gridcolor': '#ecf0f1'
+                'showgrid': True, 'gridcolor': '#ecf0f1',
+                'range': [0, 100]
             },
             legend={
-                'orientation': 'h', 'yanchor': 'bottom', 'y': -0.25, 'xanchor': 'center', 'x': 0.5,
+                'orientation': 'h', 'yanchor': 'bottom', 'y': -0.28, 'xanchor': 'center', 'x': 0.5,
                 'title': {'text': 'Type de certification', 'font': {'size': 14, 'color': '#34495e'}},
-                'font': {'color': '#34495e', 'size': 14}
+                'font': {'color': '#34495e', 'size': 12}
             },
-            margin=dict(l=80, r=80, t=140, b=160), width=1200, height=800
+            margin=dict(l=80, r=80, t=150, b=180), width=1200, height=800,
+            barmode='stack'
         )
         fig.update_traces(marker_line_width=0, opacity=0.9)
-        # Couleurs corporate
-        colors = {"DPE": "#2E86AB", "Audit énergétique": "#A23B72"}
+        # Couleurs corporate - 5 catégories
+        colors = {
+            "DPE": "#2E86AB",
+            "Audit énergétique": "#A23B72",
+            "Amiante": "#F18F01",
+            "Plomb": "#C73E1D",
+            "Autres (Élec, Gaz, Termites, etc.)": "#6A994E"
+        }
         
     elif theme == "modern":
         # Thème Moderne - Design épuré
         fig.update_layout(
             title={
-                'text': "Diagnostiqueurs Certifiés en France<br><sub>Évolution sur 12 mois</sub>",
+                'text': "Certifications de Diagnostiqueurs en France<br><sub>Répartition en pourcentages | Une personne peut détenir plusieurs certifications</sub>",
                 'x': 0.5, 'xanchor': 'center',
-                'font': {'size': 28, 'family': 'Helvetica, sans-serif', 'color': '#1a1a1a'}
+                'font': {'size': 26, 'family': 'Helvetica, sans-serif', 'color': '#1a1a1a'}
             },
             plot_bgcolor='#fafafa', paper_bgcolor='#fafafa',
             xaxis={
-                'showgrid': False, 
+                'showgrid': False,
                 'title_font': {'size': 16, 'color': '#333'},
                 'tickfont': {'size': 14, 'color': '#333'}
             },
             yaxis={
-                'showgrid': True, 'gridcolor': '#e0e0e0', 
+                'showgrid': True, 'gridcolor': '#e0e0e0',
                 'title_font': {'size': 16, 'color': '#333'},
-                'tickfont': {'size': 14, 'color': '#333'}
+                'tickfont': {'size': 14, 'color': '#333'},
+                'range': [0, 100]
             },
             legend={
-                'orientation': 'h', 'yanchor': 'bottom', 'y': -0.25, 'xanchor': 'center', 'x': 0.5,
+                'orientation': 'h', 'yanchor': 'bottom', 'y': -0.28, 'xanchor': 'center', 'x': 0.5,
                 'title': {'text': 'Type de certification', 'font': {'size': 14, 'color': '#333'}},
-                'font': {'color': '#333', 'size': 14}
+                'font': {'color': '#333', 'size': 12}
             },
-            margin=dict(l=80, r=80, t=140, b=160), width=1200, height=800
+            margin=dict(l=80, r=80, t=150, b=180), width=1200, height=800,
+            barmode='stack'
         )
         fig.update_traces(marker_line_width=2, marker_line_color='white', opacity=1)
-        # Couleurs modernes
-        colors = {"DPE": "#667eea", "Audit énergétique": "#764ba2"}
+        # Couleurs modernes - 5 catégories
+        colors = {
+            "DPE": "#667eea",
+            "Audit énergétique": "#764ba2",
+            "Amiante": "#f093fb",
+            "Plomb": "#fa709a",
+            "Autres (Élec, Gaz, Termites, etc.)": "#4facfe"
+        }
         
     elif theme == "elegant":
         # Thème Élégant - Sophistiqué
         fig.update_layout(
             title={
-                'text': "Diagnostiqueurs Certifiés<br><sub>Évolution du marché français</sub>",
+                'text': "Certifications de Diagnostiqueurs<br><sub>Répartition du marché français | Une personne peut détenir plusieurs certifications</sub>",
                 'x': 0.5, 'xanchor': 'center',
-                'font': {'size': 26, 'family': 'Georgia, serif', 'color': '#2c2c54'}
+                'font': {'size': 24, 'family': 'Georgia, serif', 'color': '#2c2c54'}
             },
             plot_bgcolor='#f8f9fa', paper_bgcolor='#f1f3f4',
             xaxis={
-                'showgrid': True, 'gridcolor': '#dee2e6', 
+                'showgrid': True, 'gridcolor': '#dee2e6',
                 'title_font': {'size': 16, 'color': '#495057'},
                 'tickfont': {'size': 14, 'color': '#495057'}
             },
             yaxis={
-                'showgrid': True, 'gridcolor': '#dee2e6', 
+                'showgrid': True, 'gridcolor': '#dee2e6',
                 'title_font': {'size': 16, 'color': '#495057'},
-                'tickfont': {'size': 14, 'color': '#495057'}
+                'tickfont': {'size': 14, 'color': '#495057'},
+                'range': [0, 100]
             },
             legend={
-                'orientation': 'h', 'yanchor': 'bottom', 'y': -0.25, 'xanchor': 'center', 'x': 0.5,
+                'orientation': 'h', 'yanchor': 'bottom', 'y': -0.28, 'xanchor': 'center', 'x': 0.5,
                 'title': {'text': 'Type de certification', 'font': {'size': 14, 'color': '#495057'}},
-                'font': {'color': '#495057', 'size': 14}
+                'font': {'color': '#495057', 'size': 12}
             },
-            margin=dict(l=80, r=80, t=140, b=160), width=1200, height=800
+            margin=dict(l=80, r=80, t=150, b=180), width=1200, height=800,
+            barmode='stack'
         )
         fig.update_traces(marker_line_width=1, marker_line_color='#ffffff', opacity=0.95)
-        # Couleurs élégantes
-        colors = {"DPE": "#6c5ce7", "Audit énergétique": "#fd79a8"}
+        # Couleurs élégantes - 5 catégories
+        colors = {
+            "DPE": "#6c5ce7",
+            "Audit énergétique": "#fd79a8",
+            "Amiante": "#fdcb6e",
+            "Plomb": "#e17055",
+            "Autres (Élec, Gaz, Termites, etc.)": "#74b9ff"
+        }
         
     elif theme == "vibrant":
         # Thème Dynamique - Couleurs vives
         fig.update_layout(
             title={
-                'text': "🏠 Diagnostiqueurs Certifiés en France 📈<br><sub>Croissance du secteur immobilier</sub>",
+                'text': "🏠 Certifications de Diagnostiqueurs en France 📊<br><sub>Répartition du secteur immobilier | Une personne peut détenir plusieurs certifications</sub>",
                 'x': 0.5, 'xanchor': 'center',
-                'font': {'size': 26, 'family': 'Arial Black, sans-serif', 'color': '#2d3436'}
+                'font': {'size': 24, 'family': 'Arial Black, sans-serif', 'color': '#2d3436'}
             },
             plot_bgcolor='#ffffff', paper_bgcolor='#dfe6e9',
             xaxis={
-                'showgrid': True, 'gridcolor': '#b2bec3', 
+                'showgrid': True, 'gridcolor': '#b2bec3',
                 'title_font': {'size': 16, 'color': '#2d3436'},
                 'tickfont': {'size': 14, 'color': '#2d3436'}
             },
             yaxis={
-                'showgrid': True, 'gridcolor': '#b2bec3', 
+                'showgrid': True, 'gridcolor': '#b2bec3',
                 'title_font': {'size': 16, 'color': '#2d3436'},
-                'tickfont': {'size': 14, 'color': '#2d3436'}
+                'tickfont': {'size': 14, 'color': '#2d3436'},
+                'range': [0, 100]
             },
             legend={
-                'orientation': 'h', 'yanchor': 'bottom', 'y': -0.25, 'xanchor': 'center', 'x': 0.5,
+                'orientation': 'h', 'yanchor': 'bottom', 'y': -0.28, 'xanchor': 'center', 'x': 0.5,
                 'title': {'text': 'Type de certification', 'font': {'size': 14, 'color': '#2d3436'}},
-                'font': {'color': '#2d3436', 'size': 14}
+                'font': {'color': '#2d3436', 'size': 12}
             },
-            margin=dict(l=80, r=80, t=140, b=160), width=1200, height=800
+            margin=dict(l=80, r=80, t=150, b=180), width=1200, height=800,
+            barmode='stack'
         )
         fig.update_traces(marker_line_width=0, opacity=1)
-        # Couleurs vibrantes
-        colors = {"DPE": "#00b894", "Audit énergétique": "#e17055"}
+        # Couleurs vibrantes - 5 catégories
+        colors = {
+            "DPE": "#00b894",
+            "Audit énergétique": "#e17055",
+            "Amiante": "#fdcb6e",
+            "Plomb": "#d63031",
+            "Autres (Élec, Gaz, Termites, etc.)": "#0984e3"
+        }
     
-    # Appliquer les couleurs
-    for i, trace in enumerate(fig.data):
-        cert_type = chart_df.iloc[i*len(chart_df)//2]['certificate_type'] if i == 0 else "Audit énergétique"
+    # Appliquer les couleurs - In stacked bar chart, each trace corresponds to a certificate type
+    for trace in fig.data:
+        cert_type = trace.name  # trace.name contains the certificate type label
         if cert_type in colors:
             trace.marker.color = colors[cert_type]
-    
-    # Ajouter les valeurs sur les barres pour tous les thèmes
+
+    # Update traces for percentage display (no text on bars for stacked charts to avoid clutter)
     fig.update_traces(
-        texttemplate='%{y}',
-        textposition='outside',
-        textfont=dict(size=12, family='Arial, sans-serif', color='#2c3e50')
+        textposition='none',  # Don't show text on bars for cleaner look
+        hovertemplate='<b>%{fullData.name}</b><br>' +
+                     'Pourcentage: %{y:.1f}%<br>' +
+                     'Nombre: %{customdata[0]:,}<br>' +
+                     'Total certifications: %{customdata[1]:,}<br>' +
+                     '<extra></extra>'
     )
-    
+
     # Annotation source commune
     fig.add_annotation(
-        text="Source: data.gouv.fr - Annuaire des diagnostiqueurs immobiliers | Seuls les certificats valides sont comptabilisés",
+        text="Source: data.gouv.fr - Annuaire des diagnostiqueurs immobiliers | Seuls les certificats valides sont comptabilisés<br>Note: Une personne peut détenir plusieurs certifications",
         showarrow=False, xref="paper", yref="paper",
-        x=0.5, y=-0.12, xanchor='center', yanchor='top',
-        font=dict(size=12, color='#7f8c8d', family='Arial, sans-serif')
+        x=0.5, y=-0.17, xanchor='center', yanchor='top',
+        font=dict(size=11, color='#7f8c8d', family='Arial, sans-serif')
     )
     
     return fig
@@ -217,40 +252,45 @@ def generate_histogram():
             st.error("Aucune donnée disponible pour générer l'histogramme")
             return None, None, None
         
-        # Créer l'histogramme avec Plotly (utiliser directement chart_df qui a déjà les bons labels)
+        # Créer l'histogramme avec Plotly en mode stacked avec pourcentages
         fig = px.bar(
             chart_df,
             x="month",
-            y="count",
+            y="percentage",
             color="certificate_type",
-            barmode="group",
+            barmode="stack",
             labels={
                 "month": "Mois",
-                "count": "Nombre de diagnostiqueurs",
+                "percentage": "Pourcentage (%)",
                 "certificate_type": "Type de certification"
             },
-            title="Évolution du nombre de diagnostiqueurs certifiés (12 derniers mois)",
+            title="Répartition des certifications de diagnostiqueurs (12 derniers mois)",
             color_discrete_map={
-                "DPE": "#1f77b4",  # Bleu
-                "Audit énergétique": "#ff7f0e"  # Orange
-            }
+                "DPE": "#2E86AB",
+                "Audit énergétique": "#A23B72",
+                "Amiante": "#F18F01",
+                "Plomb": "#C73E1D",
+                "Autres (Élec, Gaz, Termites, etc.)": "#6A994E"
+            },
+            hover_data={"count": True, "total": True}
         )
         
         # Personnaliser l'apparence avec légende mieux centrée
         fig.update_layout(
             xaxis_title="Mois",
-            yaxis_title="Nombre de diagnostiqueurs",
+            yaxis_title="Pourcentage de certifications (%)",
+            yaxis=dict(range=[0, 100]),  # Force y-axis to show 0-100%
             legend={
-                'orientation': 'h', 
-                'yanchor': 'bottom', 
-                'y': -0.15, 
-                'xanchor': 'center', 
+                'orientation': 'h',
+                'yanchor': 'bottom',
+                'y': -0.25,
+                'xanchor': 'center',
                 'x': 0.5,
                 'title': {'text': 'Type de certification', 'font': {'size': 14}},
-                'font': {'size': 14},
-                'itemwidth': 30
+                'font': {'size': 12},
             },
             font=dict(size=14),
+            hovermode='x unified'
         )
         
         # Ajouter des informations sur les sources
@@ -268,13 +308,154 @@ if st.button("Générer l'histogramme", type="primary"):
         # Appliquer le thème sélectionné
         chart_df = prepare_chart_data(monthly_data)
         fig = apply_theme_styling(fig, st.session_state.selected_theme, chart_df)
-        
+
+        # ===== HISTOGRAMME DES NOMBRES ABSOLUS (TOTAL DIAGS + 4 CATÉGORIES) =====
+        st.subheader("📊 Nombre de diagnostiqueurs et certifications")
+        st.caption("Évolution mensuelle du total de diagnostiqueurs et des 4 principales catégories de certifications")
+
+        # Filter chart_df to exclude "Autres" category
+        count_chart_df = chart_df[chart_df['certificate_type'] != 'Autres (Élec, Gaz, Termites, etc.)'].copy()
+
+        # Add Total diagnosticians data to the chart
+        total_diags_data = []
+        for data in monthly_data:
+            year, month = data['month'].split('-')
+            month_names = {
+                1: "Jan", 2: "Fév", 3: "Mar", 4: "Avr", 5: "Mai", 6: "Juin",
+                7: "Juil", 8: "Août", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Déc"
+            }
+            month_label = f"{month_names[int(month)]} {year}"
+
+            total_diags_data.append({
+                'month': month_label,
+                'certificate_type': 'Total diagnostiqueurs',
+                'count': data['total_diagnosticians'],
+                'percentage': 0,  # Not used for count chart
+                'total': data['total']
+            })
+
+        # Append to count_chart_df
+        total_diags_df = pd.DataFrame(total_diags_data)
+        count_chart_df = pd.concat([count_chart_df, total_diags_df], ignore_index=True)
+
+        # Create grouped bar chart with counts (5 bars now: Total diags + 4 cert types)
+        fig_count = px.bar(
+            count_chart_df,
+            x="month",
+            y="count",
+            color="certificate_type",
+            barmode="group",
+            labels={
+                "month": "Mois",
+                "count": "Nombre",
+                "certificate_type": "Catégorie"
+            },
+            title="Évolution du nombre de diagnostiqueurs et certifications (12 derniers mois)",
+            color_discrete_map={
+                "Total diagnostiqueurs": "#7F8C8D",  # Gris pour total
+                "DPE": "#2E86AB",
+                "Audit énergétique": "#A23B72",
+                "Amiante": "#F18F01",
+                "Plomb": "#C73E1D"
+            }
+        )
+
+        # Apply corporate styling to count chart
+        fig_count.update_layout(
+            title={
+                'text': "Nombre de diagnostiqueurs et certifications en France<br><sub>Données officielles - Ministère de la Transition Écologique | Certificats valides uniquement</sub>",
+                'x': 0.5, 'xanchor': 'center',
+                'font': {'size': 22, 'family': 'Arial, sans-serif', 'color': '#2c3e50'}
+            },
+            plot_bgcolor='white', paper_bgcolor='white',
+            xaxis={
+                'title': 'Mois',
+                'title_font': {'size': 16, 'color': '#34495e'},
+                'tickfont': {'size': 14, 'color': '#34495e'},
+                'showgrid': True, 'gridcolor': '#ecf0f1'
+            },
+            yaxis={
+                'title': 'Nombre',
+                'title_font': {'size': 16, 'color': '#34495e'},
+                'tickfont': {'size': 14, 'color': '#34495e'},
+                'showgrid': True, 'gridcolor': '#ecf0f1'
+            },
+            legend={
+                'orientation': 'h',
+                'yanchor': 'bottom',
+                'y': -0.28,
+                'xanchor': 'center',
+                'x': 0.5,
+                'title': {'text': 'Catégorie', 'font': {'size': 14, 'color': '#34495e'}},
+                'font': {'color': '#34495e', 'size': 11}
+            },
+            margin=dict(l=80, r=80, t=150, b=200),
+            width=1200,
+            height=800,
+            font=dict(size=14),
+            hovermode='x unified'
+        )
+
+        # Update traces for better display
+        fig_count.update_traces(
+            marker_line_width=0,
+            opacity=0.9,
+            hovertemplate='<b>%{fullData.name}</b><br>' +
+                         'Nombre: %{y:,}<br>' +
+                         '<extra></extra>'
+        )
+
+        # Add source annotation
+        fig_count.add_annotation(
+            text="Source: data.gouv.fr - Annuaire des diagnostiqueurs immobiliers | Seuls les certificats valides sont comptabilisés",
+            showarrow=False, xref="paper", yref="paper",
+            x=0.5, y=-0.17, xanchor='center', yanchor='top',
+            font=dict(size=11, color='#7f8c8d', family='Arial, sans-serif')
+        )
+
+        # Display count histogram
+        st.plotly_chart(fig_count, use_container_width=True)
+
+        # Afficher un tableau récapitulatif pour les nombres absolus
+        st.subheader("Données mensuelles - Nombres absolus")
+        st.caption("Nombre de certifications valides par catégorie")
+
+        # Créer un DataFrame pour le tableau des nombres
+        count_table_data = []
+        for data in monthly_data:
+            # Convertir le mois en français pour l'affichage
+            year, month = data["month"].split('-')
+            month_names = {
+                1: "Jan", 2: "Fév", 3: "Mar", 4: "Avr", 5: "Mai", 6: "Juin",
+                7: "Juil", 8: "Août", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Déc"
+            }
+            month_label = f"{month_names[int(month)]} {year}"
+
+            count_table_data.append({
+                "Mois": month_label,
+                "Total diags": data['total_diagnosticians'],
+                "DPE": data['counts']['DPE'],
+                "Audit": data['counts']['Audit'],
+                "Amiante": data['counts']['Amiante'],
+                "Plomb": data['counts']['Plomb'],
+                "Source": data["resource_label"]
+            })
+
+        count_table_df = pd.DataFrame(count_table_data)
+        st.dataframe(count_table_df, use_container_width=True)
+
+        # ===== HISTOGRAMME DES POURCENTAGES (5 CATÉGORIES) =====
+        st.markdown("---")
+        st.subheader("📊 Répartition en pourcentages")
+        st.caption("Distribution relative de toutes les certifications (incluant Électricité, Gaz, Termites, etc.)")
+
         # Afficher l'histogramme avec le thème appliqué
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, use_container_width=True)
         
         # Afficher un tableau récapitulatif
-        st.subheader("Données mensuelles")
-        
+        st.subheader("Données mensuelles - Répartition des certifications")
+        st.caption("Note: Une même personne peut détenir plusieurs certifications, d'où l'utilisation de pourcentages")
+
         # Créer un DataFrame pour le tableau
         table_data = []
         for data in monthly_data:
@@ -285,14 +466,24 @@ if st.button("Générer l'histogramme", type="primary"):
                 7: "Juil", 8: "Août", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Déc"
             }
             month_label = f"{month_names[int(month)]} {year}"
-            
+
             table_data.append({
                 "Mois": month_label,
-                "Diagnostiqueurs DPE": data["DPE"],
-                "Diagnostiqueurs Audit": data["Audit"],
+                "Total diags": data['total_diagnosticians'],
+                "Total certifs": data["total"],
+                "DPE (%)": f"{data['percentages']['DPE']:.1f}%",
+                "DPE (nb)": data['counts']['DPE'],
+                "Audit (%)": f"{data['percentages']['Audit']:.1f}%",
+                "Audit (nb)": data['counts']['Audit'],
+                "Amiante (%)": f"{data['percentages']['Amiante']:.1f}%",
+                "Amiante (nb)": data['counts']['Amiante'],
+                "Plomb (%)": f"{data['percentages']['Plomb']:.1f}%",
+                "Plomb (nb)": data['counts']['Plomb'],
+                "Autres (%)": f"{data['percentages']['Autres']:.1f}%",
+                "Autres (nb)": data['counts']['Autres'],
                 "Source": data["resource_label"]
             })
-        
+
         table_df = pd.DataFrame(table_data)
         st.dataframe(table_df, use_container_width=True)
         
