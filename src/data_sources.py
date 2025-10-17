@@ -56,15 +56,21 @@ SELECT
       JSON_GET(r.attributes, 'fastapi.arguments.values'),
       'project_id'
   )                                         AS "id projet",
-  r.span_name                               AS "span_name"
+  r.span_name                               AS "span_name",
+  r.attributes -> 'fastapi.arguments.values' AS "_raw_values"
 FROM   records r
 LEFT JOIN success_spans s USING(trace_id)
 WHERE  (
-          r.span_name ILIKE 'POST /projects/%/message'   -- prompts (corrigé: projects au pluriel)
-       OR r.span_name ILIKE 'GET /projects/%/liciel%'    -- exports Liciel (corrigé: projects au pluriel)
+          (r.span_name ILIKE 'POST /projects/%/message'
+           AND r.start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY)
+       OR (r.span_name ILIKE 'POST /projects/%/prompts/chat'
+           AND r.start_timestamp >= '2025-10-13')
+       OR (r.span_name ILIKE 'POST /projects/%/transcribe'
+           AND r.start_timestamp >= '2025-10-13')
+       OR (r.span_name ILIKE 'GET /projects/%/liciel%'
+           AND r.start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY)
       )
   AND  r.project_id = '{project_guid}'
-  AND  {date_filter}
 ORDER  BY r.start_timestamp DESC
 LIMIT  {limit} OFFSET {offset}
 """
@@ -282,17 +288,104 @@ def _get_proj_to_user() -> dict[str, str]:
     _mapping_cache_set("proj_to_user", _proj_to_user)
     return _proj_to_user
 
+def _parse_new_route_data(raw_values_json: Any) -> dict[str, Any]:
+    """
+    Parse data from the new route POST /projects/%/prompts/chat.
+
+    Handles two cases:
+    1. Already-parsed dict (Logfire returns pre-parsed JSON for some records)
+    2. Double-JSON-encoded string (for other records)
+
+    The user_prompts array contains ALL historical prompts - we want the LAST one.
+    Returns dict with: email, prompt, scope, project_id
+    """
+    import json
+    import re
+
+    try:
+        result = {}
+
+        # Case 1: Already a parsed dict
+        if isinstance(raw_values_json, dict):
+            # Direct access to fields
+            auth_info = raw_values_json.get('auth_info', {})
+            if auth_info and isinstance(auth_info, dict):
+                email = auth_info.get('email')
+                if email:
+                    result["email utilisateur"] = email
+
+            # Check top-level prompt field (current prompt)
+            prompt = raw_values_json.get('prompt', {})
+            if prompt and isinstance(prompt, dict):
+                text_message = prompt.get('text_message')
+                if text_message:
+                    result["prompt"] = text_message
+
+                context = prompt.get('context', {})
+                if context and isinstance(context, dict):
+                    scope = context.get('scope')
+                    if scope:
+                        result["scope"] = scope
+
+            # Project ID
+            project_id = raw_values_json.get('project_id')
+            if project_id:
+                result["id projet"] = str(project_id)
+
+            return result
+
+        # Case 2: String (double-encoded JSON)
+        if isinstance(raw_values_json, str):
+            # First level: decode the JSON array value to get the string
+            parsed = json.loads(raw_values_json)
+
+            # If still a string, it's double-encoded
+            if isinstance(parsed, str):
+                # Extract fields using regex (JSON may be truncated)
+                # Email from auth_info
+                email_match = re.search(r'"email":\s*"([^"]+)"', parsed)
+                if email_match:
+                    result["email utilisateur"] = email_match.group(1)
+
+                # The user_prompts array contains ALL previous prompts.
+                # We want the LAST text_message (most recent prompt).
+                text_matches = list(re.finditer(r'"text_message":\s*"([^"]+)"', parsed))
+                if text_matches:
+                    # Take the last match
+                    last_match = text_matches[-1]
+                    # Unescape unicode
+                    result["prompt"] = last_match.group(1).encode().decode('unicode_escape')
+
+                # Find the last scope
+                scope_matches = list(re.finditer(r'"scope":\s*"([^"]+)"', parsed))
+                if scope_matches:
+                    result["scope"] = scope_matches[-1].group(1)
+
+                # Project ID
+                proj_match = re.search(r'"project_id":\s*"([0-9a-f-]+)"', parsed)
+                if proj_match:
+                    result["id projet"] = proj_match.group(1)
+
+            elif isinstance(parsed, dict):
+                # Already parsed after one json.loads - treat as Case 1
+                return _parse_new_route_data(parsed)
+
+        return result
+    except Exception:
+        return {}
+
+
 def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_refresh: bool = False) -> list[dict]:
     """
-    Lit jusqu'à `limit` prompts depuis la date la plus ancienne disponible.
-    
+    Lit jusqu'à `limit` prompts dans la fenêtre temporelle spécifiée.
+
     Args:
-        lookback_days: Paramètre conservé pour compatibilité mais ignoré - on récupère tout depuis le début
+        lookback_days: Nombre de jours d'historique à récupérer (par défaut 90)
         limit: Limite du nombre d'événements
         force_refresh: Force le rafraîchissement du cache
     """
-    cache_key = f"events:all:{limit}"  # Cache key modifié pour refléter qu'on récupère tout
-    
+    cache_key = f"events:{lookback_days}:{limit}"  # Cache key includes lookback_days for proper caching
+
     if force_refresh:
         clear_cache()
     elif (cached := _cache_get(cache_key)) is not None:
@@ -301,10 +394,7 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
     batch_size   = 500  # Ajusté à 500 car Logfire semble limiter à cette valeur
     collected    = []
     offset       = 0
-    
-    # Récupérer depuis la date la plus ancienne disponible (pas de filtre de date)
-    date_filter  = "1=1"  # Pas de filtre de date - on veut tout
-    
+
     # Pré-charger les mappings une seule fois
     email_by_user = _get_user_to_email()     # user_id → email
     user_by_proj = _get_proj_to_user()       # project_id → user_id
@@ -312,11 +402,11 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
     with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
         max_iterations = 10  # Protection contre les boucles infinies
         iteration = 0
-        
+
         while len(collected) < limit and iteration < max_iterations:
             sql = _PROMPT_SQL_TEMPLATE.format(
                 project_guid=_PROJECT_GUID,
-                date_filter=date_filter,
+                lookback_days=lookback_days,
                 limit=batch_size,
                 offset=offset,
             )
@@ -329,6 +419,18 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
 
             # —— complète les e-mails manquants (optimisé) ——
             for row in batch:
+                # Pour la nouvelle route /prompts/chat, parser les données si manquantes
+                span_name = row.get("span_name", "")
+                if "prompts/chat" in span_name and not row.get("prompt"):
+                    raw_values = row.get("_raw_values")
+                    if raw_values:
+                        parsed_data = _parse_new_route_data(raw_values)
+                        # Mettre à jour uniquement les champs manquants
+                        for key, value in parsed_data.items():
+                            if not row.get(key):
+                                row[key] = value
+
+                # Enrichissement email si toujours manquant
                 if not row.get("email utilisateur"):
                     # 1️⃣ tentative via user_id direct (s'il existe toujours)
                     uid = row.get("user_id")
@@ -340,10 +442,13 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
                         uid = user_by_proj.get(str(pid)) if pid else None
                         if uid and (email := email_by_user.get(str(uid))):
                             row["email utilisateur"] = email
-                row.pop("user_id", None)  # on retire pour ne pas polluer les DataFrames
+
+                # Nettoyage des champs internes
+                row.pop("user_id", None)
+                row.pop("_raw_values", None)
 
             collected.extend(batch)
-            
+
             # Continuer tant qu'on reçoit des résultats (même si moins que batch_size)
             # On s'arrête seulement si on n'a aucun résultat
             offset += len(batch)  # Utiliser len(batch) au lieu de batch_size

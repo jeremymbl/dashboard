@@ -331,7 +331,7 @@ if exclude_test:
 # T5 – Tableau complet
 # ------------------------------------------------------------------
 # Filtrer pour ne garder que les vrais prompts (POST message), pas les exports Liciel
-_MESSAGE_ROUTE = r"POST /projects/.+/message"  # Corrigé: projects au pluriel
+_MESSAGE_ROUTE = r"POST /projects/.+/(message|prompts/chat)"  # Matches both old and new prompt routes
 prompts_only_df = filt_df[filt_df["span_name"].str.contains(_MESSAGE_ROUTE, na=False, regex=True)].copy()
 
 st.subheader(f"T5  •  Tous les prompts ({len(prompts_only_df)})")
