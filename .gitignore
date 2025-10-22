@@ -12,6 +12,7 @@ __pycache__/
 env/
 dist/
 build/
+tmp/
 
 test_liciel.py
 TestSupabase.py

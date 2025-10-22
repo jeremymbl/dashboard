@@ -294,12 +294,33 @@ def main():
     try:
         sb = get_supabase()
 
-        # Load data
-        requests_df = pd.DataFrame(fetch_all_rows(sb, "auditoo", "transcription_requests"))
-        jobs_df = pd.DataFrame(fetch_all_rows(sb, "auditoo", "transcription_jobs"))
-        responses_df = pd.DataFrame(
-            fetch_all_rows(sb, "auditoo", "transcription_responses")
-        )
+        # Define date filter - October 20th, 2025 at 15:57:26 UTC
+        # This is when the racing strategy changed to only use:
+        # - mistral:voxtral-mini-latest
+        # - openai:gpt-4o-transcribe
+        # - openai:gpt-4o-mini-transcribe
+        start_date = "2025-10-20T15:57:26+00:00"
+
+        print(f"Fetching data from {start_date} onwards (new racing strategy)...\n")
+
+        # Load jobs with date filtering - filter by requested_at timestamp
+        jobs_data = sb.schema("auditoo").table("transcription_jobs").select("*").gte("requested_at", start_date).execute().data
+        jobs_df = pd.DataFrame(jobs_data)
+
+        if not jobs_df.empty:
+            # Get unique request IDs from the filtered jobs
+            request_ids = jobs_df["transcription_request_id"].unique().tolist()
+
+            # Fetch requests for these jobs
+            requests_data = sb.schema("auditoo").table("transcription_requests").select("*").in_("id", request_ids).execute().data
+            requests_df = pd.DataFrame(requests_data)
+
+            # Fetch responses for these requests
+            responses_data = sb.schema("auditoo").table("transcription_responses").select("*").in_("transcription_request_id", request_ids).execute().data
+            responses_df = pd.DataFrame(responses_data)
+        else:
+            requests_df = pd.DataFrame()
+            responses_df = pd.DataFrame()
 
         if requests_df.empty or jobs_df.empty or responses_df.empty:
             print("ERROR: No data")
