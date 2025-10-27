@@ -30,3 +30,4 @@ uv.lock
 uv.lock
 .env.claude
 .claude/
+streamlit_caching.md
