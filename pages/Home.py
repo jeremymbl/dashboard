@@ -5,33 +5,51 @@ require_login()
 import plotly.express as px
 import pandas as pd
 import numpy as np
-import datetime as _dt 
+import datetime as _dt
 from streamlit import column_config as cc
 from zoneinfo import ZoneInfo
-
-from src.data_sources import fetch_logfire_events, clear_cache
+from src.data_sources import clear_cache
 from src.home_helpers import (
     load_prompts_df,
-    get_weekly_metrics,
     daily_prompt_series,
     daily_active_users,
     weekly_active_users,
     weekly_liciel_exports,
 )
-from src.bucket_helpers import get_bucket_images, format_file_size, format_datetime, get_image_author
 
 st.title("Home dashboard (données live logfire)")
 
-df = load_prompts_df()
+# Initialize session state for dynamic data loading
+if 'current_lookback_days' not in st.session_state:
+    st.session_state.current_lookback_days = 7  # Default: 7 days for fast loading
+
+if 'df_cache' not in st.session_state:
+    st.session_state.df_cache = None
+
+# Load data if not already loaded or if we need more data
+if st.session_state.df_cache is None:
+    df = load_prompts_df(lookback_days=st.session_state.current_lookback_days)
+    st.session_state.df_cache = df
+else:
+    df = st.session_state.df_cache
 
 # ————————————————————————————————
-# Toggle global dans la barre latérale
+# Toggle global dans la barre latérale (partagé avec Images.py)
 # ————————————————————————————————
 
+# Initialize in session_state if not present
+if 'exclude_test' not in st.session_state:
+    st.session_state.exclude_test = True
+
+# Use key to bind to session state (no need for value parameter)
 exclude_test = st.sidebar.toggle(
     "Exclure données de test (test@test.com et @auditoo.eco)",
-    value=True,
+    value=True,  # Default value only used on first run
+    key='exclude_test'
 )
+
+# Get the current value from session state
+exclude_test = st.session_state.exclude_test
 
 if exclude_test:
     emails = df["email utilisateur"].str.lower().fillna("")
@@ -174,30 +192,7 @@ st.plotly_chart(fig_wau, use_container_width=True)
 
 # ------------------------------------------------------------------
 
-# 1. Source de données
-
-# ------------------------------------------------------------------
-
-today_local = _dt.datetime.now(ZoneInfo("Europe/Paris")).date()
-earliest_dt = _dt.date(2025, 6, 1)
-days_back   = (today_local - earliest_dt).days + 1
-
-raw = fetch_logfire_events(lookback_days=days_back, limit=20000)
-
-if not raw:
-    st.error("Aucune donnée disponible depuis Logfire.")
-    st.stop()
-st.caption("Données live Logfire")
-df = pd.DataFrame(raw)
-df["timestamp"] = pd.to_datetime(
-    df["timestamp"],
-    format="%d/%m/%Y %H:%M:%S",
-    errors="coerce"
-)
-
-# ------------------------------------------------------------------
-
-# 2. Filtres globaux
+# 2. Filtres globaux (using df loaded above)
 
 # ------------------------------------------------------------------
 
@@ -205,6 +200,9 @@ col_refresh, col_title = st.columns([1, 4])
 with col_refresh:
     if st.button("🔄 Actualiser", help="Force le rafraîchissement des données (ignore le cache)"):
         clear_cache()
+        # Also clear session state cache
+        st.session_state.df_cache = None
+        st.session_state.current_lookback_days = 7
         st.rerun()
 
 with col_title:
@@ -213,9 +211,10 @@ with col_title:
 col1, col2, col3, col4 = st.columns(4)
 
 today_local   = _dt.datetime.now(ZoneInfo("Europe/Paris")).date()
-default_start = earliest_dt
-default_end   = today_local                 # 👈 ancre l’ouverture sur le mois courant
-calendar_max  = today_local                 # borne sup = aujourd’hui
+default_start = today_local - _dt.timedelta(days=6)  # 7-day range (6 days back + today = 7 days)
+default_end   = today_local                 # 👈 ancre l'ouverture sur le mois courant
+calendar_max  = today_local                 # borne sup = aujourd'hui
+calendar_min  = today_local - _dt.timedelta(days=180)  # 6 months historical data
 
 def _normalize_date_range(
     sel,
@@ -271,7 +270,7 @@ with col1:
     raw_sel = st.date_input(
         "Période",
         value=(default_start, default_end),
-        min_value=default_start,
+        min_value=calendar_min,
         max_value=calendar_max,
         format="DD/MM/YYYY",
         key="home_period",
@@ -281,13 +280,34 @@ with col1:
         prev=st.session_state.get("_home_period_last"),
         default_start=default_start,
         default_end=default_end,
-        min_value=default_start,
+        min_value=calendar_min,
         max_value=calendar_max,
     )
     st.session_state["_home_period_last"] = (start_date, end_date)
-    # Optionnel : feedback si l’utilisateur n’a fixé qu’une borne
+
+    # ——— Dynamic data loading: detect if we need more historical data ———
+    required_lookback_days = (today_local - start_date).days + 1
+
+    if required_lookback_days > st.session_state.current_lookback_days:
+        # User selected dates outside current range - need to reload with more data
+        st.session_state.needs_reload = True
+        st.session_state.required_lookback_days = required_lookback_days
+
+    # Optionnel : feedback si l'utilisateur n'a fixé qu'une borne
     if isinstance(raw_sel, _dt.date):
-        st.info("Plage incomplète détectée : j’ai fixé une plage d’un jour.", icon="ℹ️")
+        st.info("Plage incomplète détectée : j'ai fixé une plage d'un jour.", icon="ℹ️")
+
+# ——— Handle dynamic data reload if needed ———
+if st.session_state.get('needs_reload', False):
+    required_days = st.session_state.required_lookback_days
+    with st.spinner(f"⏳ Chargement de {required_days} jours d'historique en cours..."):
+        # Load new data with more lookback days
+        df = load_prompts_df(lookback_days=required_days)
+        st.session_state.df_cache = df
+        st.session_state.current_lookback_days = required_days
+        st.session_state.needs_reload = False
+    # Rerun to refresh the page with new data
+    st.rerun()
 
 with col2:
     user_filter = st.text_input("Email contient…")
@@ -690,259 +710,3 @@ else:
     st.dataframe(pivot_exp, use_container_width=True)
     st.caption("Exports Liciel comptés quand `span_name` contient « GET /project/*/liciel ».")
 
-
-# ------------------------------------------------------------------
-# T11 – Galerie d'images
-# ------------------------------------------------------------------
-st.divider()
-st.subheader("T11  •  Galerie d'images")
-
-# Récupération des images
-with st.spinner("Chargement des images..."):
-    images = get_bucket_images(limit=20)
-
-# Application du filtre d'exclusion des données de test
-if exclude_test and images:
-    filtered_images = []
-    for image in images:
-        project_id = image.get('project_id', '')
-        author = get_image_author(project_id)
-        
-        # Exclure si l'auteur est test@test.com ou se termine par @auditoo.eco
-        if author and author.lower() != "n/a":
-            author_lower = author.lower()
-            if author_lower == "test@test.com" or author_lower.endswith("@auditoo.eco"):
-                continue  # Exclure cette image
-        
-        filtered_images.append(image)
-    
-    images = filtered_images
-
-if not images:
-    st.info("Aucune image trouvée dans le bucket." + (" (après exclusion des données de test)" if exclude_test else ""))
-else:
-    # En-tête avec statistiques
-    col_info1, col_info2, col_info3 = st.columns(3)
-    with col_info1:
-        st.metric("Images", len(images))
-    with col_info2:
-        unique_projects = len(set(img.get('project_id', '') for img in images))
-        st.metric("Projets", unique_projects)
-    with col_info3:
-        total_size = sum(img.get('metadata', {}).get('size', 0) for img in images)
-        st.metric("Taille totale", format_file_size(total_size))
-    
-    st.markdown("---")
-    
-    # Slider pour le nombre d'images par ligne
-    cols_per_row = st.slider(
-        "Images par ligne",
-        min_value=2,
-        max_value=5,
-        value=3,
-        step=1,
-        help="Nombre d'images à afficher par ligne dans la galerie."
-    )
-    
-    # CSS personnalisé pour les cartes d'images avec hauteur fixe
-    st.markdown("""
-    <style>
-    .image-card {
-        border: 1px solid #e0e0e0;
-        border-radius: 12px;
-        padding: 12px;
-        margin: 8px 0;
-        background: white;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-    }
-    .image-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    }
-    .image-metadata {
-        background: #f8f9fa;
-        border-radius: 8px;
-        padding: 8px;
-        margin-top: 8px;
-        font-size: 0.85em;
-        line-height: 1.4;
-    }
-    .project-badge {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 4px 8px;
-        border-radius: 12px;
-        font-size: 0.75em;
-        font-weight: 600;
-        display: inline-block;
-        margin-bottom: 8px;
-    }
-    .metadata-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin: 4px 0;
-    }
-    .metadata-label {
-        color: #666;
-        font-weight: 500;
-    }
-    .metadata-value {
-        color: #333;
-        font-weight: 400;
-    }
-    /* Cibler UNIQUEMENT les images dans la section galerie (après le titre T11) */
-    .main .block-container > div:last-child div[data-testid="stImage"] > img {
-        height: 250px !important;
-        width: 100% !important;
-        object-fit: cover !important;
-        border-radius: 8px;
-    }
-    .main .block-container > div:last-child div[data-testid="stImage"] {
-        height: 250px !important;
-        overflow: hidden;
-        border-radius: 8px;
-    }
-    /* Préserver l'affichage normal pour les vues modales/agrandies */
-    div[data-testid="stImageViewer"] img,
-    div[data-testid="stModal"] img,
-    div[data-testid="stImageModal"] img,
-    .stModal img {
-        height: auto !important;
-        width:  auto !important;
-        object-fit: contain !important;
-        max-width: 100% !important;
-        max-height: 100% !important;
-    }
-
-    /* ——— Lightbox full-screen sans JS ——— */
-    .lightbox {
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.85);
-        display: none;
-        align-items: center;
-        justify-content: center;
-        z-index: 9999;
-        cursor: zoom-out;    
-    }
-    .lightbox:target {
-        display: flex;
-    }
-    .lightbox img {
-        max-width: 90vw;
-        max-height: 90vh;
-        border-radius: 12px;
-        box-shadow: 0 2px 24px rgba(0,0,0,0.4);
-    }
-
-    /* ——— Lightbox full-screen sans JS ——— */
-    .lightbox {
-        position: fixed;
-        inset: 0;
-        background: rgba(0,0,0,0.85);
-        display: none;
-        align-items: center;
-        justify-content: center;
-        z-index: 9999;
-    }
-    .lightbox:target {
-        display: flex;
-    }
-    .lightbox img {
-        max-width: 90vw;
-        max-height: 90vh;
-        border-radius: 12px;
-        box-shadow: 0 2px 24px rgba(0,0,0,0.4);
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Affichage en grille avec cartes stylisées
-    for i in range(0, len(images), cols_per_row):
-        cols = st.columns(cols_per_row)
-        
-        for j, col in enumerate(cols):
-            if i + j < len(images):
-                image = images[i + j]
-                
-                with col:
-                    # Container avec style personnalisé
-                    with st.container():
-                        try:
-                            # Badge du projet avec tooltip
-                            project_id = image.get('project_id', 'N/A')
-                            project_short = project_id[:12] + "..." if len(project_id) > 12 else project_id
-                            
-                            st.markdown(f'<div class="project-badge" title="{project_id}">{project_short}</div>', 
-                                      unsafe_allow_html=True)
-                            
-                            # Image principale avec lightbox
-                            # 1. Identifiant unique pour chaque lightbox
-                            img_id = f"img-{i+j}"
-
-                            # 2. Miniature → ancre #img-X (ouvre la lightbox)
-                            # 3. Lightbox cachée (#img-X) : clique n'importe où pour fermer (href="")
-                            st.markdown(
-                                f'''
-                                <a href="#{img_id}" target="_self">
-                                    <img src="{image['image_url']}"
-                                         style="width:100%; height:250px; object-fit:cover; border-radius:8px; cursor:zoom-in;" />
-                                </a>
-
-                                <a href="#" id="{img_id}" class="lightbox" target="_self">
-                                    <img src="{image['image_url']}" />
-                                </a>
-                                ''',
-                                unsafe_allow_html=True
-                            )
-                            
-                            # Métadonnées dans un container stylisé
-                            metadata = image.get('metadata', {})
-                            file_name = image.get('name', 'N/A').split('/')[-1]
-                            file_size = format_file_size(metadata.get('size', 0))
-                            created_at = format_datetime(image.get('created_at', ''))
-                            
-                            # Récupération de l'auteur de l'image
-                            author = get_image_author(project_id)
-                            
-                            # Raccourcir le nom de fichier si trop long
-                            if len(file_name) > 25:
-                                file_name = file_name[:22] + "..."
-                            
-                            # Raccourcir l'email de l'auteur si trop long
-                            author_display = author
-                            if author != "N/A" and len(author) > 20:
-                                author_display = author[:17] + "..."
-                            
-                            metadata_html = f"""
-                            <div class="image-metadata">
-                                <div class="metadata-row">
-                                    <span class="metadata-label">Auteur:</span>
-                                    <span class="metadata-value" title="{author}">{author_display}</span>
-                                </div>
-                                <div class="metadata-row">
-                                    <span class="metadata-label">Fichier:</span>
-                                    <span class="metadata-value">{file_name}</span>
-                                </div>
-                                <div class="metadata-row">
-                                    <span class="metadata-label">Taille:</span>
-                                    <span class="metadata-value">{file_size}</span>
-                                </div>
-                                <div class="metadata-row">
-                                    <span class="metadata-label">Créé:</span>
-                                    <span class="metadata-value">{created_at}</span>
-                                </div>
-                            </div>
-                            """
-                            
-                            st.markdown(metadata_html, unsafe_allow_html=True)
-                            
-                        except Exception as e:
-                            st.error(f"Erreur de chargement")
-                            st.caption(f"Détails: {str(e)[:50]}...")
-    
-    # Footer avec informations
-    st.markdown("---")
-    st.caption("Images triées par date de création (plus récentes en premier) • Bucket privé Supabase")

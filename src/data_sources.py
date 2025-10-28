@@ -64,9 +64,9 @@ WHERE  (
           (r.span_name ILIKE 'POST /projects/%/message'
            AND r.start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY)
        OR (r.span_name ILIKE 'POST /projects/%/prompts/chat'
-           AND r.start_timestamp >= '2025-10-13')
+           AND r.start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY)
        OR (r.span_name ILIKE 'POST /projects/%/transcribe'
-           AND r.start_timestamp >= '2025-10-13')
+           AND r.start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY)
        OR (r.span_name ILIKE 'GET /projects/%/liciel%'
            AND r.start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY)
       )
@@ -237,12 +237,15 @@ _proj_to_user : dict[str, str] | None = None
 def _get_user_to_email() -> dict[str, str]:
     """user_id → email  (auditoo.users) avec cache optimisé."""
     global _user_to_email
-    
+
     # Vérifier le cache d'abord
     if (cached := _mapping_cache_get("user_to_email")) is not None:
+        print("   ✓ user_to_email mapping loaded from cache")
         return cached
-    
+
     if _user_to_email is None:
+        print("   ⏱️  Loading user_to_email mapping from Supabase (auditoo.users)...")
+        _start = time.time()
         sb   = get_supabase()
         rows = (
             sb.schema("auditoo")
@@ -253,7 +256,8 @@ def _get_user_to_email() -> dict[str, str]:
             or []
         )
         _user_to_email = {str(r["id"]): r["email"] for r in rows if r.get("email")}
-    
+        print(f"   ✅ Loaded {len(_user_to_email)} users in {time.time()-_start:.2f}s")
+
     # Mettre en cache avec TTL plus long
     _mapping_cache_set("user_to_email", _user_to_email)
     return _user_to_email
@@ -261,12 +265,15 @@ def _get_user_to_email() -> dict[str, str]:
 def _get_proj_to_user() -> dict[str, str]:
     """project_id → user_id  (auditoo.user_prompts) avec cache optimisé."""
     global _proj_to_user
-    
+
     # Vérifier le cache d'abord
     if (cached := _mapping_cache_get("proj_to_user")) is not None:
+        print("   ✓ proj_to_user mapping loaded from cache")
         return cached
-    
+
     if _proj_to_user is None:
+        print("   ⏱️  Loading proj_to_user mapping from Supabase (auditoo.user_prompts)...")
+        _start = time.time()
         sb   = get_supabase()
         rows = (
             sb.schema("auditoo")
@@ -283,7 +290,8 @@ def _get_proj_to_user() -> dict[str, str]:
             uid = str(r.get("user_id"))
             if pid and uid and pid not in _proj_to_user:
                 _proj_to_user[pid] = uid
-    
+        print(f"   ✅ Loaded {len(_proj_to_user)} project mappings in {time.time()-_start:.2f}s")
+
     # Mettre en cache avec TTL plus long
     _mapping_cache_set("proj_to_user", _proj_to_user)
     return _proj_to_user
@@ -384,26 +392,36 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
         limit: Limite du nombre d'événements
         force_refresh: Force le rafraîchissement du cache
     """
+    _func_start = time.time()
     cache_key = f"events:{lookback_days}:{limit}"  # Cache key includes lookback_days for proper caching
 
     if force_refresh:
+        print("   🔄 Force refresh requested - clearing cache")
         clear_cache()
     elif (cached := _cache_get(cache_key)) is not None:
+        print(f"   ✅ Cache HIT for fetch_logfire_events (returning {len(cached)} rows instantly)")
         return cached
+
+    print(f"   ⚠️  Cache MISS - fetching from Logfire (lookback_days={lookback_days}, limit={limit})")
 
     batch_size   = 500  # Ajusté à 500 car Logfire semble limiter à cette valeur
     collected    = []
     offset       = 0
 
     # Pré-charger les mappings une seule fois
+    print("   📊 Pre-loading Supabase mappings...")
+    _mappings_start = time.time()
     email_by_user = _get_user_to_email()     # user_id → email
     user_by_proj = _get_proj_to_user()       # project_id → user_id
+    print(f"   ✅ Mappings loaded in {time.time()-_mappings_start:.2f}s")
 
+    print("   🔍 Starting Logfire query batches...")
     with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
-        max_iterations = 10  # Protection contre les boucles infinies
+        max_iterations = (limit // batch_size) + 2  # Dynamic based on limit (+2 for safety)
         iteration = 0
 
         while len(collected) < limit and iteration < max_iterations:
+            _batch_start = time.time()
             sql = _PROMPT_SQL_TEMPLATE.format(
                 project_guid=_PROJECT_GUID,
                 lookback_days=lookback_days,
@@ -415,7 +433,10 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
 
             # Si aucun résultat, on arrête
             if not batch:
+                print(f"   ✓ Batch {iteration+1}: No more results")
                 break
+
+            print(f"   ✓ Batch {iteration+1}: Fetched {len(batch)} rows in {time.time()-_batch_start:.2f}s")
 
             # —— complète les e-mails manquants (optimisé) ——
             for row in batch:
@@ -453,5 +474,7 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
             # On s'arrête seulement si on n'a aucun résultat
             offset += len(batch)  # Utiliser len(batch) au lieu de batch_size
             iteration += 1
+
     _cache_set(cache_key, collected[:limit])
+    print(f"   ✅ fetch_logfire_events COMPLETE: {len(collected[:limit])} rows in {time.time()-_func_start:.2f}s total")
     return collected[:limit]

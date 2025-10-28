@@ -12,6 +12,7 @@ from datetime import datetime
 import base64
 
 
+@st.cache_data(ttl=600)  # Cache for 10 minutes
 def get_bucket_images(limit: int = 50) -> List[Dict[str, Any]]:
     """
     Récupère toutes les images du bucket project-files.
@@ -150,6 +151,7 @@ def format_datetime(date_str: str) -> str:
         return date_str
 
 
+@st.cache_data(ttl=600)  # Cache for 10 minutes
 def get_image_author(project_id: str) -> str:
     """
     Récupère l'auteur d'une image basé sur le project_id.
