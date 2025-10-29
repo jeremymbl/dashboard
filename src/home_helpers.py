@@ -13,6 +13,7 @@ import datetime as _dt
 
 # Reduced from 150 days to 7 days for faster loading (90% performance improvement)
 _LOOKBACK_DAYS = 7
+LOGFIRE_ROW_LIMIT = 3000  # Limite à ~6 batches pour rester sous la rate limit
 
 
 def load_prompts_df(lookback_days: int | None = None) -> pd.DataFrame:
@@ -23,7 +24,7 @@ def load_prompts_df(lookback_days: int | None = None) -> pd.DataFrame:
         lookback_days: Number of days to look back (default: 7 days for fast loading)
     """
     days = lookback_days if lookback_days is not None else _LOOKBACK_DAYS
-    rows = fetch_logfire_events(lookback_days=days, limit=20000)
+    rows = fetch_logfire_events(lookback_days=days, limit=LOGFIRE_ROW_LIMIT)
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)

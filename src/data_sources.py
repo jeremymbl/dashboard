@@ -140,6 +140,15 @@ _http = httpx.Client(
 )
 
 # ---------------------------------------------------------------------------
+# Logfire query tuning
+# ---------------------------------------------------------------------------
+
+LOGFIRE_BATCH_SIZE = 500  # Exposed for diagnostics/scripts
+_LOGFIRE_RATE_LIMIT_MAX_RETRIES = 4
+_LOGFIRE_RATE_LIMIT_BACKOFF_BASE = 1.5  # seconds, exponential backoff
+_LOGFIRE_POST_BATCH_DELAY = 0.2  # seconds, light throttling between batches
+
+# ---------------------------------------------------------------------------
 # Simple in‑memory TTL cache for expensive Logfire queries
 # ---------------------------------------------------------------------------
 
@@ -404,7 +413,7 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
 
     print(f"   ⚠️  Cache MISS - fetching from Logfire (lookback_days={lookback_days}, limit={limit})")
 
-    batch_size   = 500  # Ajusté à 500 car Logfire semble limiter à cette valeur
+    batch_size   = LOGFIRE_BATCH_SIZE  # Ajusté car Logfire semble limiter à cette valeur
     collected    = []
     offset       = 0
 
@@ -428,7 +437,23 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
                 limit=batch_size,
                 offset=offset,
             )
-            res   = client.query_json_rows(sql=sql)
+            retries = 0
+            while True:
+                try:
+                    res = client.query_json_rows(sql=sql)
+                    break
+                except AssertionError as exc:
+                    if "Rate limit exceeded" in str(exc) and retries < _LOGFIRE_RATE_LIMIT_MAX_RETRIES:
+                        wait_seconds = _LOGFIRE_RATE_LIMIT_BACKOFF_BASE * (2 ** retries)
+                        print(
+                            f"   ⏳ Rate limit hit on batch {iteration+1} "
+                            f"(retry {retries+1}/{_LOGFIRE_RATE_LIMIT_MAX_RETRIES}) – sleeping {wait_seconds:.2f}s"
+                        )
+                        time.sleep(wait_seconds)
+                        retries += 1
+                        continue
+                    raise
+
             batch = res.get("rows", res)
 
             # Si aucun résultat, on arrête
@@ -474,6 +499,9 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
             # On s'arrête seulement si on n'a aucun résultat
             offset += len(batch)  # Utiliser len(batch) au lieu de batch_size
             iteration += 1
+
+            if _LOGFIRE_POST_BATCH_DELAY:
+                time.sleep(_LOGFIRE_POST_BATCH_DELAY)
 
     _cache_set(cache_key, collected[:limit])
     print(f"   ✅ fetch_logfire_events COMPLETE: {len(collected[:limit])} rows in {time.time()-_func_start:.2f}s total")
