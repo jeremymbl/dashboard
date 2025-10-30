@@ -9,24 +9,40 @@ from __future__ import annotations
 from typing import Dict
 from src.data_sources import fetch_logfire_events
 import pandas as pd
+import streamlit as st
 import datetime as _dt
 
 # Reduced from 150 days to 7 days for faster loading (90% performance improvement)
 _LOOKBACK_DAYS = 7
-LOGFIRE_ROW_LIMIT = 3000  # Limite à ~6 batches pour rester sous la rate limit
+
+# A safety limit on the number of raw rows fetched for the interactive tables.
+# This prevents the app from crashing or timing out on very busy periods.
+# The dashboard KPIs above are NOT affected by this limit.
+DASHBOARD_ROW_LIMIT = 1000
 
 
 def load_prompts_df(lookback_days: int | None = None) -> pd.DataFrame:
     """
-    Load prompts from Logfire.
+    Load raw prompt data from Logfire for the detailed, interactive tables.
 
     Args:
         lookback_days: Number of days to look back (default: 7 days for fast loading)
     """
     days = lookback_days if lookback_days is not None else _LOOKBACK_DAYS
-    rows = fetch_logfire_events(lookback_days=days, limit=LOGFIRE_ROW_LIMIT)
+
+    # We explicitly pass the limit to the fetching function.
+    rows = fetch_logfire_events(lookback_days=days, limit=DASHBOARD_ROW_LIMIT)
+
     if not rows:
         return pd.DataFrame()
+
+    # Add a global warning if the data was truncated by the limit.
+    if len(rows) == DASHBOARD_ROW_LIMIT:
+        st.warning(
+            f"⚠️ **Avertissement :** Les données des tableaux détaillés ci-dessous sont limitées aux **{DASHBOARD_ROW_LIMIT} enregistrements les plus récents** pour des raisons de performance. "
+            "Les titres des tableaux précisent la plage de dates réelle des données affichées. Les KPIs en haut de la page restent exacts."
+        )
+
     df = pd.DataFrame(rows)
     df["timestamp"] = pd.to_datetime(df["timestamp"], dayfirst=True, errors="coerce")
     return df

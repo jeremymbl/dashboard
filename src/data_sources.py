@@ -12,6 +12,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import httpx
+import pandas as pd
 import streamlit as st
 from supabase import Client as SupabaseClient, create_client
 
@@ -73,6 +74,101 @@ WHERE  (
   AND  r.project_id = '{project_guid}'
 ORDER  BY r.start_timestamp DESC
 LIMIT  {limit} OFFSET {offset}
+"""
+
+_AGGREGATED_METRICS_SQL_TEMPLATE = """
+WITH relevant_spans AS (
+    SELECT
+        trace_id,
+        start_timestamp,
+        span_name,
+        COALESCE(
+            attributes -> 'fastapi.arguments.values' -> 'auth_info' ->> 'email',
+            attributes -> 'user_email' ->> 0
+        ) AS email
+    FROM records
+    WHERE (
+            span_name ILIKE 'POST /projects/%/message' OR
+            span_name ILIKE 'POST /projects/%/prompts/chat' OR
+            span_name ILIKE 'GET /projects/%/liciel%'
+          )
+      AND start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY
+      AND project_id = '{project_guid}'
+),
+success_spans AS (
+    SELECT DISTINCT trace_id
+    FROM records
+    WHERE span_name = 'Agent run succeeded'
+      AND start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY
+      AND project_id = '{project_guid}'
+)
+SELECT
+    CAST((start_timestamp AT TIME ZONE 'Europe/Paris') AS DATE) AS "date",
+    COUNT(DISTINCT email) AS "dau",
+    SUM(CASE WHEN span_name ILIKE 'POST /projects/%/message' OR span_name ILIKE 'POST /projects/%/prompts/chat' THEN 1 ELSE 0 END) AS "total_prompts",
+    SUM(CASE WHEN (span_name ILIKE 'POST /projects/%/message' OR span_name ILIKE 'POST /projects/%/prompts/chat') AND s.trace_id IS NOT NULL THEN 1 ELSE 0 END) AS "successful_prompts",
+    SUM(CASE WHEN span_name ILIKE 'GET /projects/%/liciel%' THEN 1 ELSE 0 END) AS "liciel_exports"
+FROM relevant_spans r
+LEFT JOIN success_spans s USING(trace_id)
+GROUP BY 1
+ORDER BY 1 ASC;
+"""
+
+_WEEKLY_PROJECTS_SQL_TEMPLATE = """
+SELECT
+    DATE_TRUNC('week', start_timestamp AT TIME ZONE 'Europe/Paris') AS "week_start_date",
+    COUNT(DISTINCT JSON_GET(
+        JSON_GET(attributes, 'fastapi.arguments.values'),
+        'project_id'
+    )) AS "unique_project_count"
+FROM records
+WHERE
+    start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY
+    AND project_id = '{project_guid}'
+    AND JSON_GET(JSON_GET(attributes, 'fastapi.arguments.values'), 'project_id') IS NOT NULL
+    -- Exclude test users to get accurate project counts
+    AND LOWER(COALESCE(
+        attributes -> 'fastapi.arguments.values' -> 'auth_info' ->> 'email',
+        attributes -> 'user_email' ->> 0,
+        ''
+    )) NOT LIKE '%@auditoo.eco'
+    AND LOWER(COALESCE(
+        attributes -> 'fastapi.arguments.values' -> 'auth_info' ->> 'email',
+        attributes -> 'user_email' ->> 0,
+        ''
+    )) != 'test@test.com'
+GROUP BY 1
+ORDER BY 1 DESC;
+"""
+
+_WEEKLY_ACTIVE_USERS_SQL_TEMPLATE = """
+SELECT
+    DATE_TRUNC('week', start_timestamp AT TIME ZONE 'Europe/Paris') AS "week_start_date",
+    COUNT(DISTINCT COALESCE(
+        attributes -> 'fastapi.arguments.values' -> 'auth_info' ->> 'email',
+        attributes -> 'user_email' ->> 0
+    )) AS "wau"
+FROM records
+WHERE
+    start_timestamp >= CURRENT_DATE - INTERVAL {lookback_days} DAY
+    AND project_id = '{project_guid}'
+    AND COALESCE(
+        attributes -> 'fastapi.arguments.values' -> 'auth_info' ->> 'email',
+        attributes -> 'user_email' ->> 0
+    ) IS NOT NULL
+    -- Exclude test users for accurate user counts
+    AND LOWER(COALESCE(
+        attributes -> 'fastapi.arguments.values' -> 'auth_info' ->> 'email',
+        attributes -> 'user_email' ->> 0,
+        ''
+    )) NOT LIKE '%@auditoo.eco'
+    AND LOWER(COALESCE(
+        attributes -> 'fastapi.arguments.values' -> 'auth_info' ->> 'email',
+        attributes -> 'user_email' ->> 0,
+        ''
+    )) != 'test@test.com'
+GROUP BY 1
+ORDER BY 1 DESC;
 """
 
 # ---------------------------------------------------------------------------
@@ -506,3 +602,106 @@ def fetch_logfire_events(*, lookback_days: int = 90, limit: int = 20_000, force_
     _cache_set(cache_key, collected[:limit])
     print(f"   ✅ fetch_logfire_events COMPLETE: {len(collected[:limit])} rows in {time.time()-_func_start:.2f}s total")
     return collected[:limit]
+
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def fetch_aggregated_dashboard_data(*, lookback_days: int = 30) -> pd.DataFrame:
+    """
+    Fetches pre-aggregated daily metrics from Logfire for the main dashboard.
+    This is much faster than fetching raw events.
+    """
+    print(f"   🚀 Fetching AGGREGATED dashboard data for the last {lookback_days} days...")
+    sql = _AGGREGATED_METRICS_SQL_TEMPLATE.format(
+        project_guid=_PROJECT_GUID,
+        lookback_days=lookback_days,
+    )
+    try:
+        with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
+            res = client.query_json_rows(sql=sql)
+
+        df = pd.DataFrame(res.get("rows", res))
+        if df.empty:
+            return pd.DataFrame(columns=["date", "dau", "total_prompts", "successful_prompts", "liciel_exports"])
+
+        df['date'] = pd.to_datetime(df['date']).dt.date
+        df['failed_prompts'] = df['total_prompts'] - df['successful_prompts']
+        print(f"   ✅ AGGREGATED data fetched successfully ({len(df)} rows).")
+        return df
+    except Exception as e:
+        st.error(f"Failed to fetch aggregated dashboard data: {e}")
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def fetch_weekly_project_counts(*, lookback_days: int = 90) -> pd.DataFrame:
+    """
+    Fetches the count of unique active projects per week from Logfire.
+    Excludes test users (@auditoo.eco and test@test.com).
+    """
+    print(f"   🚀 Fetching weekly unique project counts for the last {lookback_days} days...")
+    sql = _WEEKLY_PROJECTS_SQL_TEMPLATE.format(
+        project_guid=_PROJECT_GUID,
+        lookback_days=lookback_days,
+    )
+    try:
+        with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
+            res = client.query_json_rows(sql=sql)
+
+        df = pd.DataFrame(res.get("rows", res))
+        if df.empty:
+            return pd.DataFrame(columns=["week_start_date", "unique_project_count"])
+
+        # Handle date conversion - week_start_date comes as ISO 8601 string
+        if 'week_start_date' in df.columns:
+            # Parse ISO 8601 timestamps with timezone
+            df['week_start_date'] = pd.to_datetime(df['week_start_date'], format='ISO8601', utc=True)
+            # Convert to Europe/Paris timezone
+            df['week_start_date'] = df['week_start_date'].dt.tz_convert('Europe/Paris')
+            # Extract just the date part
+            df['week_start_date'] = df['week_start_date'].dt.date
+
+        print(f"   ✅ Weekly project counts fetched successfully ({len(df)} rows).")
+        return df
+    except Exception as e:
+        st.error(f"Failed to fetch weekly project counts: {e}")
+        print(f"   ❌ Error details: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return pd.DataFrame()
+
+
+def fetch_weekly_active_users(*, lookback_days: int = 90) -> pd.DataFrame:
+    """
+    Fetches the true WAU (Weekly Active Users) - total unique users per week from Logfire.
+    Excludes test users (@auditoo.eco and test@test.com).
+    """
+    print(f"   🚀 Fetching true WAU counts for the last {lookback_days} days...")
+    sql = _WEEKLY_ACTIVE_USERS_SQL_TEMPLATE.format(
+        project_guid=_PROJECT_GUID,
+        lookback_days=lookback_days,
+    )
+    try:
+        with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
+            res = client.query_json_rows(sql=sql)
+
+        df = pd.DataFrame(res.get("rows", res))
+        if df.empty:
+            return pd.DataFrame(columns=["week_start_date", "wau"])
+
+        # Handle date conversion - week_start_date comes as ISO 8601 string
+        if 'week_start_date' in df.columns:
+            # Parse ISO 8601 timestamps with timezone
+            df['week_start_date'] = pd.to_datetime(df['week_start_date'], format='ISO8601', utc=True)
+            # Convert to Europe/Paris timezone
+            df['week_start_date'] = df['week_start_date'].dt.tz_convert('Europe/Paris')
+            # Extract just the date part
+            df['week_start_date'] = df['week_start_date'].dt.date
+
+        print(f"   ✅ Weekly active users fetched successfully ({len(df)} rows).")
+        return df
+    except Exception as e:
+        st.error(f"Failed to fetch weekly active users: {e}")
+        print(f"   ❌ Error details: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return pd.DataFrame()
