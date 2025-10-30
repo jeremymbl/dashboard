@@ -172,6 +172,46 @@ ORDER BY 1 DESC;
 """
 
 # ---------------------------------------------------------------------------
+# Project Inspection SQL Template (for debugging user interactions)
+# ---------------------------------------------------------------------------
+
+_INSPECTION_SQL_TEMPLATE = """
+WITH agent_run_traces AS (
+    SELECT DISTINCT trace_id
+    FROM records
+    WHERE span_name = 'agent run'
+),
+success_spans AS (
+    SELECT DISTINCT trace_id
+    FROM records
+    WHERE span_name = 'Agent run succeeded'
+)
+SELECT
+    r.trace_id,
+    r.span_id,
+    r.span_name,
+    r.start_timestamp AT TIME ZONE 'Europe/Paris' AS "timestamp",
+    r.duration,
+    r.attributes,
+    CASE
+        WHEN s.trace_id IS NOT NULL THEN 'success'
+        ELSE 'failure'
+    END AS status
+FROM records r
+INNER JOIN agent_run_traces a ON r.trace_id = a.trace_id
+LEFT JOIN success_spans s ON r.trace_id = s.trace_id
+WHERE r.project_id = '{logfire_project_id}'
+    AND r.span_name LIKE 'POST /projects/%'
+    AND r.start_timestamp >= NOW() - INTERVAL '{lookback_days} days'
+    AND (
+        r.attributes -> 'fastapi.arguments.values' ->> 'project_id' = '{user_project_id}'
+        OR r.attributes -> 'fastapi.arguments.values' LIKE '%"project_id":"{user_project_id}"%'
+    )
+ORDER BY r.start_timestamp DESC
+LIMIT {limit}
+"""
+
+# ---------------------------------------------------------------------------
 # Supabase configuration
 # ---------------------------------------------------------------------------
 
@@ -705,3 +745,216 @@ def fetch_weekly_active_users(*, lookback_days: int = 90) -> pd.DataFrame:
         import traceback
         print(traceback.format_exc())
         return pd.DataFrame()
+
+
+# ---------------------------------------------------------------------------
+# Project Inspection Functions (for debugging user interactions)
+# ---------------------------------------------------------------------------
+
+def construct_logfire_url(trace_id: str, span_id: Optional[str] = None, window: str = "30d") -> str:
+    """
+    Construct logfire URL to view trace (same format as Home.py make_logfire_url).
+
+    Args:
+        trace_id: Logfire trace ID
+        span_id: Optional span ID (kept for compatibility, not used)
+        window: Time window for trace view (default: 30d)
+
+    Returns:
+        URL string to logfire UI
+    """
+    if not trace_id:
+        return ""
+    return (
+        f"{_LF_PROJECT_URL}"
+        f"?q=trace_id%3D%27{trace_id}%27"  # URL-encoded filter
+        f"&traceId={trace_id}"              # Pre-selected trace
+        f"&last={window}"                   # Time window
+    )
+
+
+def _fetch_trace_spans(trace_id: str) -> list[dict]:
+    """
+    Fetch all spans for a trace.
+
+    Uses cache to avoid repeated queries for same trace.
+    """
+    cache_key = f"trace_spans_{trace_id}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    query = f"""
+    SELECT
+        trace_id,
+        span_id,
+        parent_span_id,
+        span_name,
+        start_timestamp AT TIME ZONE 'Europe/Paris' AS "timestamp",
+        duration,
+        attributes,
+        is_exception
+    FROM records
+    WHERE trace_id = '{trace_id}'
+    ORDER BY start_timestamp ASC
+    """
+
+    try:
+        with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
+            result = client.query_json_rows(sql=query)
+            spans = result.get("rows", result)
+            _cache_set(cache_key, spans)
+            return spans
+    except QueryExecutionError as e:
+        st.error(f"Error fetching trace spans: {e}")
+        return []
+
+
+def extract_run_messages(trace_id: str) -> Optional[list[dict]]:
+    """
+    Extract run_messages from agent run span.
+
+    Returns the pydantic_ai.all_messages list or None if not found.
+    """
+    spans = _fetch_trace_spans(trace_id)
+
+    # Find the 'agent run' span
+    for span in spans:
+        if span.get('span_name') == 'agent run':
+            attrs = span.get('attributes', {})
+            return attrs.get('pydantic_ai.all_messages')
+
+    return None
+
+
+def extract_agent_response(trace_id: str) -> Optional[dict]:
+    """
+    Extract agent response details from agent run span.
+
+    Returns dict with: final_result, duration, model_name, tokens
+    """
+    spans = _fetch_trace_spans(trace_id)
+
+    for span in spans:
+        if span.get('span_name') == 'agent run':
+            attrs = span.get('attributes', {})
+            return {
+                'final_result': attrs.get('final_result'),
+                'duration': span.get('duration'),
+                'model_name': attrs.get('model_name'),
+                'input_tokens': attrs.get('gen_ai.usage.input_tokens'),
+                'output_tokens': attrs.get('gen_ai.usage.output_tokens'),
+            }
+
+    return None
+
+
+def fetch_project_interactions(
+    user_project_id: str,
+    *,
+    lookback_days: int = 30,
+    limit: int = 100
+) -> list[dict]:
+    """
+    Fetch all interactions for a specific user project.
+
+    Args:
+        user_project_id: The user's project ID (not logfire project_id)
+        lookback_days: Number of days to look back
+        limit: Maximum number of interactions to fetch
+
+    Returns:
+        List of interaction dicts, each containing:
+        - trace_id
+        - timestamp
+        - email
+        - scope
+        - prompt_text
+        - run_messages (list)
+        - agent_response (dict)
+        - status ('success' or 'failure')
+        - trace_url
+        - duration
+    """
+    # Check cache first
+    cache_key = f"project_interactions_{user_project_id}_{lookback_days}_{limit}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Query for prompts
+    sql = _INSPECTION_SQL_TEMPLATE.format(
+        logfire_project_id=_PROJECT_GUID,
+        user_project_id=user_project_id,
+        lookback_days=lookback_days,
+        limit=limit
+    )
+
+    try:
+        with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
+            result = client.query_json_rows(sql=sql)
+            prompt_rows = result.get("rows", result)
+    except QueryExecutionError as e:
+        st.error(f"Error fetching interactions: {e}")
+        return []
+
+    # Process each prompt
+    interactions = []
+
+    for row in prompt_rows:
+        trace_id = row.get('trace_id')
+        span_id = row.get('span_id')
+        attrs = row.get('attributes', {})
+
+        # Extract user prompt using existing parser
+        request_data = attrs.get('fastapi.arguments.values', {})
+
+        # Parse based on route type
+        email = None
+        prompt_text = None
+        scope = None
+
+        if row.get('span_name') == 'POST /projects/{project_id}/message':
+            # Old route - direct access
+            if isinstance(request_data, dict):
+                email = request_data.get('email')
+                prompt_text = request_data.get('content')
+                scope = request_data.get('scope')
+        elif 'transcribe' in row.get('span_name', ''):
+            # Transcribe route
+            if isinstance(request_data, dict):
+                auth_info = request_data.get('auth_info', {})
+                context = request_data.get('context', {})
+                email = auth_info.get('email') if isinstance(auth_info, dict) else None
+                scope = context.get('scope') if isinstance(context, dict) else None
+                prompt_text = "[Audio transcription]"
+        else:
+            # New route - use existing parser
+            parsed = _parse_new_route_data(request_data)
+            email = parsed.get('email utilisateur')
+            prompt_text = parsed.get('prompt')
+            scope = parsed.get('scope')
+
+        # Extract run messages and response
+        run_messages = extract_run_messages(trace_id)
+        agent_response = extract_agent_response(trace_id)
+
+        interaction = {
+            'trace_id': trace_id,
+            'timestamp': row.get('timestamp'),
+            'email': email,
+            'scope': scope,
+            'prompt_text': prompt_text,
+            'run_messages': run_messages or [],
+            'agent_response': agent_response or {},
+            'status': row.get('status', 'failure'),
+            'trace_url': construct_logfire_url(trace_id),
+            'duration': row.get('duration', 0),
+        }
+
+        interactions.append(interaction)
+
+    # Cache the results
+    _cache_set(cache_key, interactions)
+
+    return interactions
