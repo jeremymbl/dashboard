@@ -211,6 +211,62 @@ ORDER BY r.start_timestamp DESC
 LIMIT {limit}
 """
 
+_INSPECTION_V3_SQL_TEMPLATE = """
+WITH agent_run_traces AS (
+    -- Step 0: Find traces that actually have agent runs (to exclude pure transcriptions)
+    SELECT DISTINCT trace_id
+    FROM records
+    WHERE span_name = 'agent run'
+        AND start_timestamp >= NOW() - INTERVAL '{lookback_days} days'
+        AND project_id = '{logfire_project_id}'
+),
+initial_prompts AS (
+    -- Step 1: Find the trace_ids and initial prompt spans for the user's project
+    -- ONLY for traces that have agent runs
+    SELECT
+        r.trace_id,
+        r.span_id,
+        r.start_timestamp
+    FROM records r
+    INNER JOIN agent_run_traces a ON r.trace_id = a.trace_id
+    WHERE r.project_id = '{logfire_project_id}'
+        AND r.span_name LIKE 'POST /projects/%'
+        AND r.start_timestamp >= NOW() - INTERVAL '{lookback_days} days'
+        AND (
+            r.attributes -> 'fastapi.arguments.values' ->> 'project_id' = '{user_project_id}'
+            OR r.attributes -> 'fastapi.arguments.values' LIKE '%"project_id":"{user_project_id}"%'
+        )
+    ORDER BY r.start_timestamp DESC
+    LIMIT {limit}
+),
+success_spans AS (
+    -- Step 2: Identify successful traces
+    SELECT DISTINCT trace_id
+    FROM records
+    WHERE trace_id IN (SELECT trace_id FROM initial_prompts)
+        AND span_name = 'Agent run succeeded'
+)
+-- Step 3: JOIN records table directly against our small set of initial prompts
+SELECT
+    p.trace_id,
+    r.span_id,
+    r.parent_span_id,
+    r.span_name,
+    r.start_timestamp AT TIME ZONE 'Europe/Paris' AS "timestamp",
+    r.duration,
+    r.attributes,
+    CASE
+        WHEN s.trace_id IS NOT NULL THEN 'success'
+        ELSE 'failure'
+    END AS status
+FROM initial_prompts p
+JOIN records r ON p.trace_id = r.trace_id
+LEFT JOIN success_spans s ON p.trace_id = s.trace_id
+-- CRITICAL OPTIMIZATION: Only fetch the spans we actually care about!
+WHERE r.span_name LIKE 'POST /projects/%' OR r.span_name = 'agent run'
+ORDER BY p.start_timestamp DESC, r.start_timestamp ASC;
+"""
+
 # ---------------------------------------------------------------------------
 # Supabase configuration
 # ---------------------------------------------------------------------------
@@ -773,82 +829,6 @@ def construct_logfire_url(trace_id: str, span_id: Optional[str] = None, window: 
     )
 
 
-def _fetch_trace_spans(trace_id: str) -> list[dict]:
-    """
-    Fetch all spans for a trace.
-
-    Uses cache to avoid repeated queries for same trace.
-    """
-    cache_key = f"trace_spans_{trace_id}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        return cached
-
-    query = f"""
-    SELECT
-        trace_id,
-        span_id,
-        parent_span_id,
-        span_name,
-        start_timestamp AT TIME ZONE 'Europe/Paris' AS "timestamp",
-        duration,
-        attributes,
-        is_exception
-    FROM records
-    WHERE trace_id = '{trace_id}'
-    ORDER BY start_timestamp ASC
-    """
-
-    try:
-        with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
-            result = client.query_json_rows(sql=query)
-            spans = result.get("rows", result)
-            _cache_set(cache_key, spans)
-            return spans
-    except QueryExecutionError as e:
-        st.error(f"Error fetching trace spans: {e}")
-        return []
-
-
-def extract_run_messages(trace_id: str) -> Optional[list[dict]]:
-    """
-    Extract run_messages from agent run span.
-
-    Returns the pydantic_ai.all_messages list or None if not found.
-    """
-    spans = _fetch_trace_spans(trace_id)
-
-    # Find the 'agent run' span
-    for span in spans:
-        if span.get('span_name') == 'agent run':
-            attrs = span.get('attributes', {})
-            return attrs.get('pydantic_ai.all_messages')
-
-    return None
-
-
-def extract_agent_response(trace_id: str) -> Optional[dict]:
-    """
-    Extract agent response details from agent run span.
-
-    Returns dict with: final_result, duration, model_name, tokens
-    """
-    spans = _fetch_trace_spans(trace_id)
-
-    for span in spans:
-        if span.get('span_name') == 'agent run':
-            attrs = span.get('attributes', {})
-            return {
-                'final_result': attrs.get('final_result'),
-                'duration': span.get('duration'),
-                'model_name': attrs.get('model_name'),
-                'input_tokens': attrs.get('gen_ai.usage.input_tokens'),
-                'output_tokens': attrs.get('gen_ai.usage.output_tokens'),
-            }
-
-    return None
-
-
 def fetch_project_interactions(
     user_project_id: str,
     *,
@@ -856,7 +836,8 @@ def fetch_project_interactions(
     limit: int = 100
 ) -> list[dict]:
     """
-    Fetch all interactions for a specific user project.
+    Fetches all interactions for a specific user project using a single, efficient query
+    to avoid rate limiting.
 
     Args:
         user_project_id: The user's project ID (not logfire project_id)
@@ -876,14 +857,11 @@ def fetch_project_interactions(
         - trace_url
         - duration
     """
-    # Check cache first
-    cache_key = f"project_interactions_{user_project_id}_{lookback_days}_{limit}"
-    cached = _cache_get(cache_key)
-    if cached is not None:
+    cache_key = f"project_interactions_v4_{user_project_id}_{lookback_days}_{limit}"
+    if (cached := _cache_get(cache_key)) is not None:
         return cached
 
-    # Query for prompts
-    sql = _INSPECTION_SQL_TEMPLATE.format(
+    sql = _INSPECTION_V3_SQL_TEMPLATE.format(
         logfire_project_id=_PROJECT_GUID,
         user_project_id=user_project_id,
         lookback_days=lookback_days,
@@ -893,68 +871,72 @@ def fetch_project_interactions(
     try:
         with LogfireQueryClient(read_token=_LF_READ_TOKEN) as client:
             result = client.query_json_rows(sql=sql)
-            prompt_rows = result.get("rows", result)
-    except QueryExecutionError as e:
-        st.error(f"Error fetching interactions: {e}")
+            all_spans = result.get("rows", result)
+    except (QueryExecutionError, AssertionError) as e:
+        # Handle rate limit errors gracefully during development
+        if "Rate limit exceeded" in str(e):
+            st.error("Rate limit exceeded. Please wait a minute and try again.")
+        else:
+            st.error(f"Error fetching interactions: {e}")
         return []
 
-    # Process each prompt
+    if not all_spans:
+        return []
+
+    # Group spans by trace_id in memory (0 API calls)
+    traces = {}
+    for span in all_spans:
+        trace_id = span['trace_id']
+        if trace_id not in traces:
+            traces[trace_id] = []
+        traces[trace_id].append(span)
+
     interactions = []
-
-    for row in prompt_rows:
-        trace_id = row.get('trace_id')
-        span_id = row.get('span_id')
-        attrs = row.get('attributes', {})
-
-        # Extract user prompt using existing parser
+    for trace_id, spans in traces.items():
+        # The first span is the prompt trigger
+        prompt_span = spans[0]
+        attrs = prompt_span.get('attributes', {})
         request_data = attrs.get('fastapi.arguments.values', {})
 
-        # Parse based on route type
-        email = None
-        prompt_text = None
-        scope = None
+        # --- Extract data from spans ---
+        agent_run_span = next((s for s in spans if s.get('span_name') == 'agent run'), None)
 
-        if row.get('span_name') == 'POST /projects/{project_id}/message':
-            # Old route - direct access
-            if isinstance(request_data, dict):
-                email = request_data.get('email')
-                prompt_text = request_data.get('content')
-                scope = request_data.get('scope')
-        elif 'transcribe' in row.get('span_name', ''):
-            # Transcribe route
-            if isinstance(request_data, dict):
-                auth_info = request_data.get('auth_info', {})
-                context = request_data.get('context', {})
-                email = auth_info.get('email') if isinstance(auth_info, dict) else None
-                scope = context.get('scope') if isinstance(context, dict) else None
-                prompt_text = "[Audio transcription]"
-        else:
-            # New route - use existing parser
-            parsed = _parse_new_route_data(request_data)
-            email = parsed.get('email utilisateur')
-            prompt_text = parsed.get('prompt')
-            scope = parsed.get('scope')
+        email, prompt_text, scope = None, None, None
+        parsed = _parse_new_route_data(request_data)
+        email = parsed.get('email utilisateur')
+        prompt_text = parsed.get('prompt')
+        scope = parsed.get('scope')
+        if 'transcribe' in prompt_span.get('span_name', ''):
+            prompt_text = "[Audio transcription]"
 
-        # Extract run messages and response
-        run_messages = extract_run_messages(trace_id)
-        agent_response = extract_agent_response(trace_id)
+        run_messages = []
+        agent_response = {}
+        if agent_run_span:
+            agent_attrs = agent_run_span.get('attributes', {})
+            run_messages = agent_attrs.get('pydantic_ai.all_messages', [])
+            agent_response = {
+                'final_result': agent_attrs.get('final_result'),
+                'duration': agent_run_span.get('duration'),
+                'model_name': agent_attrs.get('model_name'),
+                'input_tokens': agent_attrs.get('gen_ai.usage.input_tokens'),
+                'output_tokens': agent_attrs.get('gen_ai.usage.output_tokens'),
+            }
 
-        interaction = {
+        interactions.append({
             'trace_id': trace_id,
-            'timestamp': row.get('timestamp'),
+            'timestamp': prompt_span.get('timestamp'),
             'email': email,
             'scope': scope,
             'prompt_text': prompt_text,
-            'run_messages': run_messages or [],
-            'agent_response': agent_response or {},
-            'status': row.get('status', 'failure'),
+            'run_messages': run_messages,
+            'agent_response': agent_response,
+            'status': prompt_span.get('status', 'failure'),
             'trace_url': construct_logfire_url(trace_id),
-            'duration': row.get('duration', 0),
-        }
+            'duration': prompt_span.get('duration', 0),
+        })
 
-        interactions.append(interaction)
+    # Sort interactions by timestamp descending
+    interactions.sort(key=lambda x: x['timestamp'], reverse=True)
 
-    # Cache the results
     _cache_set(cache_key, interactions)
-
     return interactions
