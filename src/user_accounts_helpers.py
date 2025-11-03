@@ -5,7 +5,7 @@ user_accounts_helpers.py
 Helpers pour la gestion des comptes utilisateurs avec Supabase Auth et auditoo.users
 """
 
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any
 import streamlit as st
 from src.data_sources import get_supabase
 import pandas as pd

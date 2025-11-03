@@ -1,9 +1,9 @@
 import streamlit as st
 from src.auth_guard import require_login
-
+from src.bucket_helpers import get_bucket_images, format_file_size, format_datetime, get_image_author
 require_login()
 
-from src.bucket_helpers import get_bucket_images, format_file_size, format_datetime, get_image_author
+
 
 st.title("Galerie d'images")
 

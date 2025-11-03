@@ -1,7 +1,5 @@
 import streamlit as st
 from src.auth_guard import require_login
-
-require_login()
 import plotly.express as px
 import pandas as pd
 import numpy as np
@@ -10,6 +8,9 @@ from streamlit import column_config as cc
 from zoneinfo import ZoneInfo
 from src.data_sources import clear_cache, fetch_aggregated_dashboard_data, fetch_weekly_project_counts, fetch_weekly_active_users
 from src.home_helpers import load_prompts_df, DASHBOARD_ROW_LIMIT
+
+require_login()
+
 
 
 def create_dynamic_title(base_title: str, df_view: pd.DataFrame, original_df: pd.DataFrame) -> str:

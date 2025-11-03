@@ -1,9 +1,11 @@
 import streamlit as st
 from src.auth_guard import require_login
-require_login()
-
 import pandas as pd
 from src.user_accounts_helpers import create_user_account, get_all_user_accounts, delete_user_account
+
+require_login()
+
+
 
 st.title("Comptes utilisateurs")
 

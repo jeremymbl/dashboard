@@ -168,7 +168,6 @@ def get_image_author(project_id: str) -> str:
         return "N/A"
     
     try:
-        # Import ici pour éviter les imports circulaires
         from src.data_sources import get_supabase
         
         sb = get_supabase()
@@ -206,6 +205,6 @@ def get_image_author(project_id: str) -> str:
         email = user_result.data[0].get("email")
         return email if email else "N/A"
         
-    except Exception as e:
+    except Exception:
         # En cas d'erreur, retourne N/A silencieusement
         return "N/A"

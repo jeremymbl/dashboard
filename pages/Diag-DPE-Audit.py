@@ -1,14 +1,13 @@
 import streamlit as st
 from src.auth_guard import require_login
-require_login()
-
 import plotly.express as px
 import pandas as pd
-import asyncio
 import requests
-from datetime import datetime, timedelta
 
 from src.diagnostiqueurs_helpers import fetch_and_analyze_monthly_data, prepare_chart_data
+require_login()
+
+
 
 st.title("Diagnostiqueurs Certifiés")
 

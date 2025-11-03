@@ -10,7 +10,6 @@ from typing import Dict
 from src.data_sources import fetch_logfire_events
 import pandas as pd
 import streamlit as st
-import datetime as _dt
 
 # Reduced from 150 days to 7 days for faster loading (90% performance improvement)
 _LOOKBACK_DAYS = 7

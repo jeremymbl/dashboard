@@ -14,7 +14,6 @@ import streamlit as st
 import json
 from src.data_sources import (
     fetch_project_interactions,
-    construct_logfire_url,
 )
 
 # Page config
@@ -134,9 +133,16 @@ if fetch_button or 'interactions' in st.session_state:
 
     for idx, interaction in enumerate(interactions):
         email_display = interaction['email'] or "Unknown User"
+        scope_display = interaction['scope'] or "N/A"
+
+        # Format timestamp to be more readable (remove microseconds and timezone)
+        timestamp_str = str(interaction['timestamp'])
+        if 'T' in timestamp_str:
+            # Parse ISO format and remove microseconds/timezone
+            timestamp_str = timestamp_str.split('.')[0].replace('T', ' ')
 
         with st.expander(
-            f"#{idx+1} • {interaction['timestamp']} • {email_display}",
+            f"#{idx+1} • {timestamp_str} • {scope_display} • {email_display}",
             expanded=(idx == 0)  # Expand first one by default
         ):
             # Metadata section
@@ -179,9 +185,9 @@ if fetch_button or 'interactions' in st.session_state:
                 st.caption(f"Total messages in conversation: {len(run_messages)}")
 
                 # Show messages in tabs for better organization
-                msg_tabs = st.tabs([f"Message {i+1}" for i in range(min(len(run_messages), 10))])
+                msg_tabs = st.tabs([f"Message {i+1}" for i in range(len(run_messages))])
 
-                for tab_idx, (tab, msg) in enumerate(zip(msg_tabs, run_messages[:10])):
+                for tab_idx, (tab, msg) in enumerate(zip(msg_tabs, run_messages)):
                     with tab:
                         role = msg.get('role', 'unknown')
                         role_emoji = "👤" if role == "user" else "🤖"
@@ -220,9 +226,6 @@ if fetch_button or 'interactions' in st.session_state:
                         finish_reason = msg.get('finish_reason')
                         if finish_reason:
                             st.caption(f"✓ Finish reason: `{finish_reason}`")
-
-                if len(run_messages) > 10:
-                    st.info(f"Showing first 10 of {len(run_messages)} messages. View full trace in logfire for complete history.")
             else:
                 st.warning("⚠️ No run messages found (this should not happen - please report this issue)")
 

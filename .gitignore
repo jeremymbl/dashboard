@@ -31,3 +31,5 @@ uv.lock
 .env.claude
 .claude/
 streamlit_caching.md
+
+racing_analysis_plots/

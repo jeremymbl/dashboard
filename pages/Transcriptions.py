@@ -5,12 +5,13 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 from src.auth_guard import require_login
-require_login()
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
 from src.data_sources import get_supabase
+require_login()
+
 
 st.title("Transcriptions – comparatif des services STT")
 

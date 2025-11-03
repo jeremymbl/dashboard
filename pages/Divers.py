@@ -1,13 +1,13 @@
 import streamlit as st
 from src.auth_guard import require_login 
-require_login()
 import plotly.express as px
 from zoneinfo import ZoneInfo
 import pandas as pd
-import numpy as np
 import datetime as _dt
 
 from src.home_helpers import load_prompts_df
+require_login()
+
 
 st.title("Divers")
 
