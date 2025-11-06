@@ -90,8 +90,8 @@ def get_all_user_accounts() -> pd.DataFrame:
     try:
         sb = get_supabase()
         
-        # Récupérer les utilisateurs de auth.users
-        auth_users_response = sb.auth.admin.list_users()
+        # Récupérer TOUS les utilisateurs de auth.users (default limit is 50)
+        auth_users_response = sb.auth.admin.list_users(per_page=1000)
         auth_users = auth_users_response
         
         # Récupérer les utilisateurs de auditoo.users
